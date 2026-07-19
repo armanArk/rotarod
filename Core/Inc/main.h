@@ -63,6 +63,8 @@ void Error_Handler(void);
 #define MCU_LED_GPIO_Port GPIOC
 #define POTENTIOMETER_Pin GPIO_PIN_0
 #define POTENTIOMETER_GPIO_Port GPIOA
+#define BLDC_ANALOG_Pin GPIO_PIN_1
+#define BLDC_ANALOG_GPIO_Port GPIOA
 #define SHIFT_PL_Pin GPIO_PIN_2
 #define SHIFT_PL_GPIO_Port GPIOA
 #define SHIFT_CP_Pin GPIO_PIN_3

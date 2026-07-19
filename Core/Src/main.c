@@ -44,11 +44,16 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+
 I2C_HandleTypeDef hi2c1;
+
 SPI_HandleTypeDef hspi1;
+
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim5;
+
 UART_HandleTypeDef huart1;
+
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
@@ -64,6 +69,25 @@ volatile uint32_t last_capture_time = 0;
 // --- Variabel untuk display & UART ---
 uint32_t last_display_tick = 0;
 #define DISPLAY_UPDATE_MS  100
+
+// --- Variabel untuk ADC dan PWM ---
+uint32_t adc_raw = 0;           // nilai ADC mentah 0-4095
+uint32_t adc_mv = 0;            // nilai dalam milivolt
+uint32_t pwm_duty = 0;          // duty cycle saat ini (0-4199)
+
+/*
+ * ===== KONFIGURASI PWM UNTUK BLDC_ANALOG =====
+ * - Timer: TIM5, Channel 2 (PA1)
+ * - Frekuensi PWM: 20 kHz (Period = 4199, Prescaler = 0)
+ * - Rangkaian eksternal:
+ *   1) RC Low-Pass Filter: R = 1kΩ, C = 2.2µF → cut-off ≈ 72 Hz
+ *   2) Opamp non-inverting (MCP6002, supply 5V):
+ *      Rf = 6.8 kΩ, Rg = 10 kΩ → Gain = 1 + 6.8/10 = 1.68
+ * - Output opamp = 0–5V analog untuk driver BLDC.
+ * - Duty cycle maksimum dibatasi agar output ≤ 5V:
+ *   Duty_max = 5 / (3.3 * 1.68) ≈ 0.902 → 4199 * 0.902 ≈ 3788
+ */
+#define PWM_MAX_DUTY  3788
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -91,17 +115,28 @@ void UART_Print(char *msg);
   */
 int main(void)
 {
+
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
 
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
 
   /* USER CODE END SysInit */
 
+  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_ADC1_Init();
@@ -110,7 +145,6 @@ int main(void)
   MX_TIM5_Init();
   MX_USART1_UART_Init();
   MX_TIM4_Init();
-
   /* USER CODE BEGIN 2 */
   // --- 1. Inisialisasi 74HC165 ---
   HC165_SetPins(SHIFT_PL_GPIO_Port, SHIFT_PL_Pin,
@@ -139,6 +173,14 @@ int main(void)
   HAL_TIM_IC_Start_IT(&htim4, TIM_CHANNEL_3);
   __HAL_TIM_ENABLE_IT(&htim4, TIM_IT_UPDATE);
 
+  // --- 5. Aktifkan PWM output (BLDC_ANALOG) ---
+  // Pin PA1 (TIM5_CH2) menghasilkan PWM 20 kHz
+  HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_2);
+  __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 0); // awal mati
+
+  // --- 6. Mulai ADC ---
+  HAL_ADC_Start(&hadc1);
+
   last_display_tick = HAL_GetTick();
   last_capture_time = HAL_GetTick();
   /* USER CODE END 2 */
@@ -147,9 +189,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* USER CODE END WHILE */
-
-    // --- Baca tombol dari 74HC165 ---
+    // --- Baca tombol 74HC165 ---
     uint8_t status_tombol[HC165_MY_NUM_CHIPS];
     uint8_t pins[HC165_MY_TOTAL_PINS];
     HC165_Read(status_tombol, HC165_MY_NUM_CHIPS);
@@ -161,24 +201,59 @@ int main(void)
       HAL_GPIO_WritePin(MCU_LED_GPIO_Port, MCU_LED_Pin, GPIO_PIN_SET);
     }
 
-    // --- Update display & UART setiap 100 ms ---
+    // --- Update display & UART setiap 100ms ---
     if (HAL_GetTick() - last_display_tick >= DISPLAY_UPDATE_MS) {
       // Jika tidak ada pulsa selama 500 ms, set RPM = 0
       if (HAL_GetTick() - last_capture_time > 500) {
         rpm = 0;
       }
 
-      // Tampilkan RPM
+      // Tampilkan RPM di display
       TM1637_DisplayNumber(TM1637_CLK_GPIO_Port, TM1637_CLK_Pin,
                            DISP_DIO1_GPIO_Port, DISP_DIO1_Pin, rpm, 0);
 
-      // Kirim ke UART
-      char uart_buf[32];
-      sprintf(uart_buf, "RPM: %lu\r\n", (unsigned long)rpm);
+      // Kirim data RPM, ADC, dan PWM duty via UART (debug)
+      char uart_buf[80];
+      sprintf(uart_buf, "RPM:%lu ADC:%lu(%lumV) PWM:%lu\r\n",
+              (unsigned long)rpm, adc_raw, adc_mv, pwm_duty);
       UART_Print(uart_buf);
 
       last_display_tick = HAL_GetTick();
     }
+
+    // --- Baca potensiometer dan update PWM setiap 50ms ---
+    static uint32_t last_adc_tick = 0;
+    if (HAL_GetTick() - last_adc_tick >= 50) {
+      // Mulai konversi ADC (single conversion)
+      HAL_ADC_Start(&hadc1);
+      if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK) {
+        adc_raw = HAL_ADC_GetValue(&hadc1);
+        // Konversi ke mV (referensi 3.3V)
+        adc_mv = (adc_raw * 3300) / 4095;
+      }
+
+      // --- Map ADC ke duty cycle dengan deadband dan batas maksimum ---
+      // Deadband bawah: jika ADC < 20, motor mati total
+      if (adc_raw < 20) {
+        pwm_duty = 0;
+      } else {
+        // Mapping linear 0-4095 -> 0-4199
+        pwm_duty = (adc_raw * 4200) / 4096;
+        if (pwm_duty > 4199) pwm_duty = 4199;
+      }
+
+      // Batasi duty cycle agar output opamp tidak melebihi 5V
+      if (pwm_duty > PWM_MAX_DUTY) {
+        pwm_duty = PWM_MAX_DUTY;
+      }
+
+      // Set duty cycle ke timer (TIM5 Channel 2)
+      __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, pwm_duty);
+
+      last_adc_tick = HAL_GetTick();
+    }
+
+    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
@@ -194,9 +269,14 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
+  /** Configure the main internal regulator output voltage
+  */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
 
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -205,17 +285,22 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
   RCC_OscInitStruct.PLL.PLLQ = 7;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
     Error_Handler();
   }
 
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
-                              | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
     Error_Handler();
   }
 }
@@ -228,6 +313,7 @@ void SystemClock_Config(void)
 static void MX_ADC1_Init(void)
 {
   ADC_ChannelConfTypeDef sConfig = {0};
+
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
@@ -240,13 +326,16 @@ static void MX_ADC1_Init(void)
   hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DMAContinuousRequests = DISABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  if (HAL_ADC_Init(&hadc1) != HAL_OK) {
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
     Error_Handler();
   }
+
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
     Error_Handler();
   }
 }
@@ -267,7 +356,8 @@ static void MX_I2C1_Init(void)
   hi2c1.Init.OwnAddress2 = 0;
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
     Error_Handler();
   }
 }
@@ -291,7 +381,8 @@ static void MX_SPI1_Init(void)
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi1.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK) {
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
     Error_Handler();
   }
 }
@@ -312,19 +403,22 @@ static void MX_TIM4_Init(void)
   htim4.Init.Period = 65535;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_IC_Init(&htim4) != HAL_OK) {
+  if (HAL_TIM_IC_Init(&htim4) != HAL_OK)
+  {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK) {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
     Error_Handler();
   }
   sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
   sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
   sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
   sConfigIC.ICFilter = 0;
-  if (HAL_TIM_IC_ConfigChannel(&htim4, &sConfigIC, TIM_CHANNEL_3) != HAL_OK) {
+  if (HAL_TIM_IC_ConfigChannel(&htim4, &sConfigIC, TIM_CHANNEL_3) != HAL_OK)
+  {
     Error_Handler();
   }
 }
@@ -342,22 +436,25 @@ static void MX_TIM5_Init(void)
   htim5.Instance = TIM5;
   htim5.Init.Prescaler = 0;
   htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim5.Init.Period = 4294967295;
+  htim5.Init.Period = 4199;
   htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_PWM_Init(&htim5) != HAL_OK) {
+  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_PWM_Init(&htim5) != HAL_OK)
+  {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK) {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)
+  {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim5, &sConfigOC, TIM_CHANNEL_2) != HAL_OK) {
+  if (HAL_TIM_PWM_ConfigChannel(&htim5, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
     Error_Handler();
   }
   HAL_TIM_MspPostInit(&htim5);
@@ -378,7 +475,8 @@ static void MX_USART1_UART_Init(void)
   huart1.Init.Mode = UART_MODE_TX_RX;
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK) {
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
     Error_Handler();
   }
 }
@@ -400,7 +498,8 @@ static void MX_USB_OTG_FS_PCD_Init(void)
   hpcd_USB_OTG_FS.Init.lpm_enable = DISABLE;
   hpcd_USB_OTG_FS.Init.vbus_sensing_enable = DISABLE;
   hpcd_USB_OTG_FS.Init.use_dedicated_ep1 = DISABLE;
-  if (HAL_PCD_Init(&hpcd_USB_OTG_FS) != HAL_OK) {
+  if (HAL_PCD_Init(&hpcd_USB_OTG_FS) != HAL_OK)
+  {
     Error_Handler();
   }
 }
