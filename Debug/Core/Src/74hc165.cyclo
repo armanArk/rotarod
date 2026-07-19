@@ -1,0 +1,6 @@
+../Core/Src/74hc165.c:14:6:HC165_SetPins	1
+../Core/Src/74hc165.c:23:13:HC165_Delay	2
+../Core/Src/74hc165.c:27:13:HC165_Latch	1
+../Core/Src/74hc165.c:34:13:HC165_PulseClock	1
+../Core/Src/74hc165.c:42:6:HC165_Read	5
+../Core/Src/74hc165.c:67:6:HC165_Unpack	3

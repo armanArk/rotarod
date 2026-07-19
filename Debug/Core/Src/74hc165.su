@@ -1,0 +1,6 @@
+../Core/Src/74hc165.c:14:6:HC165_SetPins	24	static
+../Core/Src/74hc165.c:23:13:HC165_Delay	16	static
+../Core/Src/74hc165.c:27:13:HC165_Latch	8	static
+../Core/Src/74hc165.c:34:13:HC165_PulseClock	8	static
+../Core/Src/74hc165.c:42:6:HC165_Read	32	static
+../Core/Src/74hc165.c:67:6:HC165_Unpack	32	static
