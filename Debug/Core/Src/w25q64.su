@@ -1,0 +1,12 @@
+../Core/Src/w25q64.c:12:20:W25Q_CS_Low	8	static
+../Core/Src/w25q64.c:15:20:W25Q_CS_High	8	static
+../Core/Src/w25q64.c:19:16:W25Q_SPI_Transceive	32	static
+../Core/Src/w25q64.c:26:6:W25Q64_Init	8	static
+../Core/Src/w25q64.c:31:10:W25Q64_ReadID	16	static
+../Core/Src/w25q64.c:43:9:W25Q64_ReadStatusRegister1	16	static
+../Core/Src/w25q64.c:52:6:W25Q64_WriteEnable	8	static
+../Core/Src/w25q64.c:58:6:W25Q64_WriteDisable	8	static
+../Core/Src/w25q64.c:64:6:W25Q64_WaitBusy	8	static
+../Core/Src/w25q64.c:70:6:W25Q64_SectorErase	16	static
+../Core/Src/w25q64.c:81:6:W25Q64_ReadData	40	static
+../Core/Src/w25q64.c:93:6:W25Q64_PageProgram	32	static
