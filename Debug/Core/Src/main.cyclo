@@ -1,0 +1,16 @@
+../Core/Src/main.c:114:13:Display_ShowNumber	2
+../Core/Src/main.c:120:13:Display_SetBrightness	2
+../Core/Src/main.c:147:5:main	23
+../Core/Src/main.c:375:6:SystemClock_Config	3
+../Core/Src/main.c:406:13:MX_ADC1_Init	3
+../Core/Src/main.c:428:13:MX_I2C1_Init	2
+../Core/Src/main.c:442:13:MX_SPI1_Init	2
+../Core/Src/main.c:459:13:MX_TIM4_Init	4
+../Core/Src/main.c:481:13:MX_TIM5_Init	4
+../Core/Src/main.c:504:13:MX_USART1_UART_Init	2
+../Core/Src/main.c:517:13:MX_USB_OTG_FS_PCD_Init	2
+../Core/Src/main.c:532:13:MX_GPIO_Init	1
+../Core/Src/main.c:590:6:UART_Print	1
+../Core/Src/main.c:595:6:HAL_TIM_IC_CaptureCallback	5
+../Core/Src/main.c:620:6:HAL_TIM_PeriodElapsedCallback	2
+../Core/Src/main.c:628:6:Error_Handler	1

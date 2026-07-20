@@ -1,8 +1,7 @@
 #ifndef DS3231_H
 #define DS3231_H
 
-#include "main.h"
-#include "i2c.h"
+#include "main.h"   // Sudah include semua HAL, termasuk I2C
 
 // Alamat I2C DS3231 (7-bit)
 #define DS3231_ADDR  0x68
@@ -26,6 +25,6 @@ void     DS3231_ReadTime(uint8_t *sec, uint8_t *min, uint8_t *hour,
 void     DS3231_SetTime(uint8_t sec, uint8_t min, uint8_t hour,
                         uint8_t day, uint8_t date, uint8_t month, uint8_t year);
 float    DS3231_ReadTemperature(void);
-void     DS3231_PrintTime(void); // Cetak ke UART via printf (atau UART_Print)
+void     DS3231_PrintTime(void); // Cetak ke UART
 
 #endif

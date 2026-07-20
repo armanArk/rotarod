@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+// Deklarasi handle I2C dari main.c
 extern I2C_HandleTypeDef hi2c1;
 extern void UART_Print(char *msg); // dari main.c
 
@@ -15,8 +16,7 @@ static uint8_t dec_to_bcd(uint8_t dec) {
 
 // ====== Public ======
 void DS3231_Init(void) {
-    // Cek koneksi dengan membaca register kedua (misal detik)
-    // Tidak perlu set apa-apa, tapi kita pastikan I2C komunikasi ok.
+    // Cek koneksi dengan membaca register detik
     uint8_t test = DS3231_ReadByte(DS3231_REG_SEC);
     if (test == 0xFF) {
         UART_Print("DS3231 not detected!\r\n");
