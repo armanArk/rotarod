@@ -5,7 +5,6 @@
 #define W25Q_CS_PORT   FLASH_CS_GPIO_Port
 #define W25Q_CS_PIN    FLASH_CS_Pin
 
-// Deklarasi handle SPI dari main.c
 extern SPI_HandleTypeDef hspi1;
 
 /* ==================== PRIVATE FUNGSI ==================== */
@@ -24,8 +23,8 @@ static uint8_t W25Q_SPI_Transceive(uint8_t tx) {
 
 /* ==================== PUBLIC FUNGSI ==================== */
 void W25Q64_Init(void) {
-    W25Q_CS_High();          // idle
-    HAL_Delay(10);           // stabil
+    W25Q_CS_High();
+    HAL_Delay(10);
 }
 
 uint32_t W25Q64_ReadID(void) {
@@ -49,6 +48,15 @@ uint8_t W25Q64_ReadStatusRegister1(void) {
     return sr;
 }
 
+void W25Q64_WriteStatusRegister1(uint8_t val) {
+    W25Q64_WriteEnable();
+    W25Q_CS_Low();
+    W25Q_SPI_Transceive(W25Q_CMD_WRSR);   // 0x01
+    W25Q_SPI_Transceive(val);
+    W25Q_CS_High();
+    W25Q64_WaitBusy();
+}
+
 void W25Q64_WriteEnable(void) {
     W25Q_CS_Low();
     W25Q_SPI_Transceive(W25Q_CMD_WREN);
@@ -63,7 +71,7 @@ void W25Q64_WriteDisable(void) {
 
 void W25Q64_WaitBusy(void) {
     while (W25Q64_ReadStatusRegister1() & 0x01) {
-        // busy, tunggu
+        // busy
     }
 }
 
@@ -74,6 +82,14 @@ void W25Q64_SectorErase(uint32_t addr) {
     W25Q_SPI_Transceive((addr >> 16) & 0xFF);
     W25Q_SPI_Transceive((addr >> 8) & 0xFF);
     W25Q_SPI_Transceive(addr & 0xFF);
+    W25Q_CS_High();
+    W25Q64_WaitBusy();
+}
+
+void W25Q64_ChipErase(void) {
+    W25Q64_WriteEnable();
+    W25Q_CS_Low();
+    W25Q_SPI_Transceive(W25Q_CMD_CE);
     W25Q_CS_High();
     W25Q64_WaitBusy();
 }
@@ -91,7 +107,7 @@ void W25Q64_ReadData(uint32_t addr, uint8_t *buffer, uint32_t length) {
 }
 
 void W25Q64_PageProgram(uint32_t addr, uint8_t *data, uint32_t length) {
-    if (length > 256) length = 256; // batasi 1 page
+    if (length > 256) length = 256;
     W25Q64_WriteEnable();
     W25Q_CS_Low();
     W25Q_SPI_Transceive(W25Q_CMD_PP);
