@@ -2,27 +2,16 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Rotarod Full System with debounced fall simulation
-  *                   - 7 Display (CLK direct)
-  *                   - RPM (TIM4 input capture)
-  *                   - PWM motor (TIM5)
-  *                   - ADC potensiometer
-  *                   - RTC DS3231
-  *                   - SPI Flash W25Q128 (CSV logging)
-  *                   - USB VBUS detection (auto flush)
-  *                   - Event logging with debounce (500ms)
-  *                   - Pre-erase Flash & clear status register for USB format
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
+  * @brief          : Rotarod with FatFs on W25Q Flash + USB MSC
+  *                   - CSV file visible in Windows Explorer
+  *                   - Auto unmount/mount on USB plug/unplug
   ******************************************************************************
   */
 /* USER CODE END Header */
+
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "fatfs.h"
 #include "usb_device.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -138,10 +127,15 @@ static void Display_SetBrightness(uint8_t idx, uint8_t brightness) {
                          brightness);
 }
 
-// ====== Logging (Queue + CSV Flash) ======
-#define LOG_QUEUE_ADDR      0x0000
-#define LOG_CSV_START       0x1000
-#define LOG_CSV_END         0x00FFFFFF
+// ====== FatFs Variables ======
+FATFS FatFs;
+FIL csv_file;
+UINT bw;
+FRESULT fr;
+static uint8_t fs_mounted = 0;
+static uint8_t fs_formatted = 0;
+
+// ====== Logging ======
 #define MAX_EVENTS          400
 
 typedef struct {
@@ -153,84 +147,7 @@ typedef struct {
 
 static FallEvent_t event_queue[MAX_EVENTS];
 static uint16_t event_count = 0;
-static uint32_t csv_write_addr = LOG_CSV_START;
 static uint8_t csv_header_written = 0;
-
-void Log_Init(void) {
-    csv_write_addr = LOG_CSV_START;
-    csv_header_written = 0;
-}
-
-void Log_AddEvent(uint16_t duration_ms, uint16_t rpm_val, uint8_t lane) {
-    if (event_count >= MAX_EVENTS) {
-        UART_Print("Queue full!\r\n");
-        return;
-    }
-    uint32_t ts = HAL_GetTick() / 1000; // fallback timestamp
-    event_queue[event_count].timestamp = ts;
-    event_queue[event_count].duration_ms = duration_ms;
-    event_queue[event_count].rpm = rpm_val;
-    event_queue[event_count].lane = lane;
-    event_count++;
-    char msg[64];
-    sprintf(msg, "Event added: dur=%d, rpm=%d, lane=%d\r\n", duration_ms, rpm_val, lane);
-    UART_Print(msg);
-}
-
-void Log_FlushToCSV(void) {
-    if (event_count == 0) {
-        UART_Print("No events.\r\n");
-        return;
-    }
-    if (!csv_header_written) {
-        W25Q64_SectorErase(LOG_CSV_START);
-        char header[] = "timestamp,duration_ms,rpm,lane\r\n";
-        W25Q64_PageProgram(csv_write_addr, (uint8_t*)header, strlen(header));
-        csv_write_addr += strlen(header);
-        csv_header_written = 1;
-        UART_Print("CSV header written.\r\n");
-    }
-    for (int i = 0; i < event_count; i++) {
-        char line[64];
-        int len = sprintf(line, "%lu,%d,%d,%d\r\n",
-                          event_queue[i].timestamp,
-                          event_queue[i].duration_ms,
-                          event_queue[i].rpm,
-                          event_queue[i].lane);
-        if (csv_write_addr + len > LOG_CSV_START + 0x1000) {
-            uint32_t next_sector = (csv_write_addr + 0x1000) & ~0xFFF;
-            if (next_sector >= LOG_CSV_END) {
-                UART_Print("Flash full!\r\n");
-                break;
-            }
-            W25Q64_SectorErase(next_sector);
-            csv_write_addr = next_sector;
-            UART_Print("Moved to next sector.\r\n");
-        }
-        uint32_t addr = csv_write_addr;
-        uint8_t *data = (uint8_t*)line;
-        uint32_t remaining = len;
-        while (remaining > 0) {
-            uint32_t page_offset = addr & 0xFF;
-            uint32_t chunk = (remaining < (256 - page_offset)) ? remaining : (256 - page_offset);
-            W25Q64_PageProgram(addr, data, chunk);
-            addr += chunk;
-            data += chunk;
-            remaining -= chunk;
-        }
-        csv_write_addr += len;
-    }
-    event_count = 0;
-    UART_Print("Flushed to CSV.\r\n");
-}
-
-void Log_ReadCSV(uint32_t start_addr, uint32_t length) {
-    if (length > 1024) length = 1024;
-    uint8_t buf[1024];
-    W25Q64_ReadData(start_addr, buf, length);
-    buf[length] = '\0';
-    UART_Print((char*)buf);
-}
 
 // ====== USB VBUS detection ======
 uint8_t usb_connected = 0;
@@ -261,6 +178,131 @@ void UART_Print(char *msg);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+// ====== FatFs Helper Functions ======
+
+static void MountFS(void) {
+    if (fs_mounted) return;
+    fr = f_mount(&FatFs, "", 1);
+    if (fr == FR_OK) {
+        fs_mounted = 1;
+        UART_Print("FatFS mounted OK\r\n");
+    } else if (fr == FR_NO_FILESYSTEM) {
+        UART_Print("No filesystem - needs format\r\n");
+        fs_mounted = 0;
+    } else {
+        char msg[32];
+        sprintf(msg, "FatFS mount err: %d\r\n", fr);
+        UART_Print(msg);
+        fs_mounted = 0;
+    }
+}
+
+static void UnmountFS(void) {
+    if (!fs_mounted) return;
+    f_mount(NULL, "", 0);
+    fs_mounted = 0;
+    UART_Print("FatFS unmounted\r\n");
+}
+
+static void FormatFS(void) {
+    UART_Print("Formatting flash...\r\n");
+    BYTE work[_MAX_SS];
+    fr = f_mkfs("", FM_FAT, 0, work, sizeof(work));
+    if (fr == FR_OK) {
+        UART_Print("Format OK\r\n");
+        fs_formatted = 1;
+        MountFS();
+    } else {
+        char msg[32];
+        sprintf(msg, "Format failed: %d\r\n", fr);
+        UART_Print(msg);
+    }
+}
+
+static void WriteCSVHeader(void) {
+    if (!fs_mounted) return;
+    fr = f_open(&csv_file, "events.csv", FA_WRITE | FA_CREATE_ALWAYS);
+    if (fr == FR_OK) {
+        char header[] = "timestamp,duration_ms,rpm,lane\r\n";
+        f_write(&csv_file, header, strlen(header), &bw);
+        f_close(&csv_file);
+        csv_header_written = 1;
+        UART_Print("CSV header written\r\n");
+    } else {
+        char msg[32];
+        sprintf(msg, "Cannot create CSV: %d\r\n", fr);
+        UART_Print(msg);
+    }
+}
+
+static void AppendCSVLine(FallEvent_t *ev) {
+    if (!fs_mounted) return;
+    fr = f_open(&csv_file, "events.csv", FA_WRITE | FA_OPEN_APPEND);
+    if (fr == FR_OK) {
+        char line[64];
+        int len = sprintf(line, "%lu,%d,%d,%d\r\n",
+                          ev->timestamp, ev->duration_ms, ev->rpm, ev->lane);
+        f_write(&csv_file, line, len, &bw);
+        f_close(&csv_file);
+    }
+}
+
+static void Log_Init(void) {
+    event_count = 0;
+    csv_header_written = 0;
+}
+
+static void Log_AddEvent(uint16_t duration_ms, uint16_t rpm_val, uint8_t lane) {
+    if (event_count >= MAX_EVENTS) {
+        UART_Print("Queue full!\r\n");
+        return;
+    }
+    event_queue[event_count].timestamp = HAL_GetTick() / 1000;
+    event_queue[event_count].duration_ms = duration_ms;
+    event_queue[event_count].rpm = rpm_val;
+    event_queue[event_count].lane = lane;
+    event_count++;
+    char msg[64];
+    sprintf(msg, "Event added: dur=%d, rpm=%d, lane=%d\r\n", duration_ms, rpm_val, lane);
+    UART_Print(msg);
+}
+
+static void Log_FlushToCSV(void) {
+    if (event_count == 0) {
+        UART_Print("No events.\r\n");
+        return;
+    }
+    if (!csv_header_written) {
+        WriteCSVHeader();
+    }
+    for (int i = 0; i < event_count; i++) {
+        AppendCSVLine(&event_queue[i]);
+    }
+    event_count = 0;
+    UART_Print("Flushed to CSV file\r\n");
+}
+
+static void Log_ReadCSV(void) {
+    if (!fs_mounted) {
+        UART_Print("FS not mounted\r\n");
+        return;
+    }
+    fr = f_open(&csv_file, "events.csv", FA_READ);
+    if (fr == FR_OK) {
+        char buf[256];
+        UINT br;
+        UART_Print("\r\n=== CSV File ===\r\n");
+        while (f_read(&csv_file, buf, sizeof(buf)-1, &br) == FR_OK && br > 0) {
+            buf[br] = '\0';
+            UART_Print(buf);
+        }
+        UART_Print("\r\n=== End ===\r\n");
+        f_close(&csv_file);
+    } else {
+        UART_Print("Cannot open events.csv\r\n");
+    }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -274,13 +316,23 @@ int main(void)
 
   /* USER CODE END 1 */
 
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
 
   /* USER CODE END SysInit */
 
+  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_ADC1_Init();
   MX_I2C1_Init();
@@ -289,6 +341,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM4_Init();
   MX_USB_DEVICE_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   // --- 1. 74HC165 ---
   HC165_SetPins(SHIFT_PL_GPIO_Port, SHIFT_PL_Pin,
@@ -339,26 +392,13 @@ int main(void)
   // --- 6. ADC ---
   HAL_ADC_Start(&hadc1);
 
-  // ===============================================================
-  // === BAGIAN SPI FLASH – DENGAN STATUS REGISTER & PRE-ERASE ===
-  // ===============================================================
+  // --- 7. SPI Flash init (for FatFs disk driver) ---
   W25Q64_Init();
-
-  // 1. Baca dan bersihkan Status Register (agar WP bit tidak aktif)
   uint8_t sr = W25Q64_ReadStatusRegister1();
-  char srmsg[50];
-  sprintf(srmsg, "Status Register 1: 0x%02X\r\n", sr);
-  UART_Print(srmsg);
-
   if (sr != 0x00) {
-      UART_Print("Clearing status register...\r\n");
       W25Q64_WriteStatusRegister1(0x00);
-      sr = W25Q64_ReadStatusRegister1();
-      sprintf(srmsg, "Status Register now: 0x%02X\r\n", sr);
-      UART_Print(srmsg);
   }
 
-  // 2. Baca ID Flash
   uint32_t flash_id = W25Q64_ReadID();
   char id_buf[80];
   uint8_t cap_byte = flash_id & 0xFF;
@@ -375,30 +415,16 @@ int main(void)
   }
   UART_Print(id_buf);
 
-  if (flash_id == 0xEF4017) UART_Print("W25Q64JV detected (8MB)\r\n");
-  else if (flash_id == 0xEF4018) UART_Print("W25Q128JV detected (16MB)\r\n");
-  else if (flash_id == 0xEF4019) UART_Print("W25Q256JV detected (32MB)\r\n");
-  else UART_Print("Unknown Flash ID\r\n");
-
-  // 3. Pre-Erase seluruh Flash (hanya sekali) agar format USB berhasil
-  #define FLAG_ADDR 0x00000000
-  uint8_t flag_buf[4];
-  W25Q64_ReadData(FLAG_ADDR, flag_buf, 4);
-  if (flag_buf[0] != 0xAA || flag_buf[1] != 0x55 || flag_buf[2] != 0xAA || flag_buf[3] != 0x55) {
-      UART_Print("First boot - Erasing entire Flash (10-20 sec)...\r\n");
-      W25Q64_ChipErase();
-      uint8_t magic[4] = {0xAA, 0x55, 0xAA, 0x55};
-      W25Q64_PageProgram(FLAG_ADDR, magic, 4);
-      UART_Print("Flash erase complete.\r\n");
-  } else {
-      UART_Print("Flash already erased.\r\n");
+  // --- 8. Mount or format FatFs ---
+  MountFS();
+  if (!fs_mounted && !fs_formatted) {
+      FormatFS();
   }
-  // ===============================================================
 
-  // --- 8. RTC ---
+  // --- 9. RTC ---
   DS3231_Init();
 
-  // --- 9. Logging init ---
+  // --- 10. Logging init ---
   Log_Init();
 
   last_display_tick = HAL_GetTick();
@@ -443,26 +469,32 @@ int main(void)
     if (pins[2]) {
       static uint32_t last_read = 0;
       if (HAL_GetTick() - last_read > 300) {
-        UART_Print("\r\n=== CSV Data ===\r\n");
-        Log_ReadCSV(LOG_CSV_START, 512);
-        UART_Print("=== End ===\r\n");
+        Log_ReadCSV();
         last_read = HAL_GetTick();
       }
     }
 
     // --- USB VBUS detection via PA8 ---
     if (HAL_GetTick() - last_usb_check >= USB_CHECK_MS) {
-        usb_connected = HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin);
-        if (usb_connected && !last_usb_state) {
-            UART_Print("USB connected!\r\n");
+        uint8_t new_usb = HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin);
+
+        if (new_usb && !last_usb_state) {
+            // USB CONNECTED: Unmount FatFs so Windows can take over
+            UART_Print("USB connected - unmounting FS\r\n");
             if (event_count > 0) {
-                UART_Print("Flushing queue to CSV...\r\n");
-                Log_FlushToCSV();
+                Log_FlushToCSV();  // Flush remaining events first
             }
-        } else if (!usb_connected && last_usb_state) {
-            UART_Print("USB disconnected!\r\n");
+            UnmountFS();
+            HAL_Delay(50);  // Let USB stack settle
+        } else if (!new_usb && last_usb_state) {
+            // USB DISCONNECTED: Remount FatFs for STM32 access
+            UART_Print("USB disconnected - remounting FS\r\n");
+            HAL_Delay(100);
+            MountFS();
         }
-        last_usb_state = usb_connected;
+
+        last_usb_state = new_usb;
+        usb_connected = new_usb;
         last_usb_check = HAL_GetTick();
     }
 
@@ -480,15 +512,15 @@ int main(void)
 
       char uart_buf[250];
       sprintf(uart_buf,
-              "[%02d:%02d:%02d %02d/%02d/%02d] RPM:%lu ADC:%lu PWM:%lu SET:%lu SR:%02X%02X%02X D0:%d %d %d USB:%d\r\n",
+              "[%02d:%02d:%02d %02d/%02d/%02d] RPM:%lu ADC:%lu PWM:%lu SET:%lu Q:%d USB:%d FS:%d\r\n",
               hour, min, sec, date, month, year,
               (unsigned long)rpm,
               adc_raw,
               pwm_duty,
               set_value,
-              status_tombol[0], status_tombol[1], status_tombol[2],
-              pins[0], pins[8], pins[16],
-              usb_connected);
+              event_count,
+              usb_connected,
+              fs_mounted);
       UART_Print(uart_buf);
 
       last_display_tick = HAL_GetTick();
@@ -532,9 +564,14 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
+  /** Configure the main internal regulator output voltage
+  */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
 
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -548,6 +585,8 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
@@ -579,6 +618,8 @@ static void MX_ADC1_Init(void)
 
   /* USER CODE END ADC1_Init 1 */
 
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  */
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
@@ -596,6 +637,8 @@ static void MX_ADC1_Init(void)
     Error_Handler();
   }
 
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
@@ -873,15 +916,16 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : DISP_CLK7_Pin */
   GPIO_InitStruct.Pin = DISP_CLK7_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DISP_CLK7_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(DISP_CLK7_GPIO_Port, DISP_CLK7_Pin, GPIO_PIN_SET);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-  GPIO_InitStruct.Pin = ALL_DIO_PINS;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  // FIX: Removed the reconfiguration of DIO pins as inputs with pull‑up,
+  // because TM1637 requires them as outputs (push‑pull) for communication.
+  // The DIO pins are correctly set as outputs above.
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
