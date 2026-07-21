@@ -18,9 +18,16 @@
 #include "74hc165.h"
 #include "w25q64.h"
 #include "ds3231.h"
+#include "usbd_core.h"
+#include "usb_device.h"
+extern USBD_HandleTypeDef hUsbDeviceFS;
+/* Control MSC readiness/capacity in USB storage layer */
+extern void STORAGE_SetMediaReady(uint8_t ready);
+extern void STORAGE_UpdateCapacity(uint32_t bytes);
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "staging.h"
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
@@ -90,6 +97,8 @@ static uint8_t csv_header_written = 0;
 // USB
 uint8_t usb_connected = 0;
 static uint8_t last_usb_state = 0;
+// VBUS EXTI event pending flag
+volatile uint8_t vbus_event_pending = 0;
 
 // Debounce
 static uint8_t prev_fall = 0;
@@ -311,7 +320,15 @@ static void CheckAndFormatIfMismatch(void) {
 
 static void WriteCSVHeader(void) {
     if (!fs_mounted) return;
-        fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
+    if (!fs_mounted) {
+        // if FS not mounted, create header in staging area
+        const char header[] = "timestamp,duration_ms,rpm,lane\r\n";
+        staging_append((const uint8_t*)header, (uint32_t)strlen(header));
+        csv_header_written = 1;
+        UART_Print("CSV header staged\r\n");
+        return;
+    }
+    fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
     if (fr == FR_OK) {
         char header[] = "timestamp,duration_ms,rpm,lane\r\n";
         f_write(&csv_file, header, strlen(header), &bw);
@@ -324,11 +341,14 @@ static void WriteCSVHeader(void) {
 }
 
 static void AppendCSVLine(FallEvent_t *ev) {
-    if (!fs_mounted) return;
-        fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
+    char line[64];
+    int len = sprintf(line, "%lu,%u,%u,%u\r\n", ev->timestamp, ev->duration_ms, ev->rpm, ev->lane);
+    if (!fs_mounted) {
+        staging_append((const uint8_t*)line, (uint32_t)len);
+        return;
+    }
+    fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
     if (fr == FR_OK) {
-        char line[64];
-        int len = sprintf(line, "%lu,%u,%u,%u\r\n", ev->timestamp, ev->duration_ms, ev->rpm, ev->lane);
         f_write(&csv_file, line, len, &bw);
         f_close(&csv_file);
     }
@@ -354,6 +374,20 @@ static void Log_FlushToCSV(void) {
     for (int i = 0; i < event_count; i++) AppendCSVLine(&event_queue[i]);
     event_count = 0;
     UART_Print("Flushed to CSV\r\n");
+}
+
+static void Log_StageEvents(void) {
+    if (event_count == 0) { UART_Print("No events to stage.\r\n"); return; }
+    for (int i = 0; i < event_count; i++) {
+        char line[64];
+        int len = sprintf(line, "%lu,%u,%u,%u\r\n", event_queue[i].timestamp, event_queue[i].duration_ms, event_queue[i].rpm, event_queue[i].lane);
+        if (staging_append((const uint8_t*)line, (uint32_t)len) != 0) {
+            UART_Print("Staging append failed\r\n");
+            return;
+        }
+    }
+    event_count = 0;
+    UART_Print("Staged events to flash\r\n");
 }
 
 static void Log_ReadCSV(void) {
@@ -448,6 +482,9 @@ int main(void)
     // RTC
     DS3231_Init();
 
+    // Initialize staging area for queued writes while USB attached
+    if (staging_init() == 0) UART_Print("Staging initialized\r\n");
+
     // Logging
     Log_Init();
 
@@ -489,22 +526,48 @@ int main(void)
             if (HAL_GetTick() - last_read > 300) { Log_ReadCSV(); last_read = HAL_GetTick(); }
         }
 
-        // USB VBUS detection
-        if (HAL_GetTick() - last_usb_check >= USB_CHECK_MS) {
+        // USB VBUS detection (handled by EXTI or periodic poll)
+        if (vbus_event_pending || (HAL_GetTick() - last_usb_check >= USB_CHECK_MS)) {
             uint8_t new_usb = HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin);
             if (new_usb && !last_usb_state) {
-                UART_Print("USB connected - unmounting FS\r\n");
-                if (event_count > 0) Log_FlushToCSV();
-                UnmountFS();
+                UART_Print("USB connected - staging events, committing before host probe\r\n");
+                // Tell MSC layer to report not-ready while we prepare the media
+                STORAGE_SetMediaReady(0);
+
+                // Ensure FS is mounted so we can replay staged entries into the CSV
+                if (!fs_mounted) MountFS();
+
+                // Move queued events into staging area
+                if (event_count > 0) Log_StageEvents();
+
+                // If there are staged entries, replay them into the mounted FS now
+                if (staging_has_entries()) {
+                    UART_Print("Committing staged entries to FS before host probe...\r\n");
+                    if (staging_commit() == 0) UART_Print("Staging committed\r\n");
+                    else UART_Print("Staging commit failed\r\n");
+                }
+
+                // Ensure all caches flushed then unmount so host can mount the updated FS
                 HAL_Delay(50);
+                UnmountFS();
+
+                // Update MSC capacity and mark media ready for the host
+                STORAGE_UpdateCapacity(flash_capacity_bytes);
+                STORAGE_SetMediaReady(1);
             } else if (!new_usb && last_usb_state) {
                 UART_Print("USB disconnected - remounting FS\r\n");
                 HAL_Delay(100);
                 MountFS();
+                if (staging_has_entries()) {
+                    UART_Print("Committing staged entries to FS...\r\n");
+                    if (staging_commit() == 0) UART_Print("Staging committed\r\n");
+                    else UART_Print("Staging commit failed\r\n");
+                }
             }
             last_usb_state = new_usb;
             usb_connected = new_usb;
             last_usb_check = HAL_GetTick();
+            vbus_event_pending = 0;
         }
 
         // Display update (100ms)
@@ -711,8 +774,13 @@ static void MX_GPIO_Init(void)
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     GPIO_InitStruct.Pin = USB_VBUS_SENSE_Pin | SHIFT_Q7_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* Enable and set EXTI line Interrupt to the lowest priority */
+    HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
     GPIO_InitStruct.Pin = DISP_CLK7_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -741,6 +809,13 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM4) timer_overflow++;
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == USB_VBUS_SENSE_Pin) {
+        vbus_event_pending = 1;
+    }
 }
 
 void Error_Handler(void)

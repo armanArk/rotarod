@@ -14,6 +14,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_storage_if.h"
 #include "w25q64.h"
+#include "main.h"
 
 /* USER CODE BEGIN INCLUDE */
 /* USER CODE END INCLUDE */
@@ -112,6 +113,8 @@ static uint8_t sector_buf[4096];
   */
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
+// Signal from main indicating USB VBUS presence
+extern volatile uint8_t usb_connected;
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
 /* USER CODE END EXPORTED_VARIABLES */
@@ -181,12 +184,7 @@ int8_t STORAGE_Init_FS(uint8_t lun)
   }
 
   s_block_count = s_flash_capacity_bytes / STORAGE_BLK_SIZ;
-
-  {
-    char dbg[80]; sprintf(dbg, "STORAGE_Init_FS: cap=%lu bytes blocks=%lu\r\n",
-                           (unsigned long)s_flash_capacity_bytes, (unsigned long)s_block_count);
-    UART_Print(dbg);
-  }
+  /* Avoid heavy/blocking debug I/O in USB callbacks (log from main loop instead) */
 
   // Mark media ready for fast IsReady responses
   s_media_ready = (s_block_count > 0) ? 1 : 0;
@@ -210,11 +208,6 @@ int8_t STORAGE_GetCapacity_FS(uint8_t lun, uint32_t *block_num, uint16_t *block_
   if (s_block_count == 0) return USBD_FAIL;
   *block_num  = s_block_count - 1;
   *block_size = STORAGE_BLK_SIZ;
-  {
-    char dbg[80]; sprintf(dbg, "STORAGE_GetCapacity_FS: last_lba=%lu blk_size=%u\r\n",
-                           (unsigned long)*block_num, (unsigned int)*block_size);
-    UART_Print(dbg);
-  }
   return (USBD_OK);
   /* USER CODE END 3 */
 }
@@ -282,6 +275,12 @@ int8_t STORAGE_Write_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t b
   /* USER CODE BEGIN 7 */
   UNUSED(lun);
 
+  // Avoid performing flash erase/program from USB context while app may be using SPI
+  // If VBUS is present, host may be probing/writing — avoid long flash ops here
+  if (HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin) == GPIO_PIN_SET) {
+    return USBD_FAIL;
+  }
+
   // Bounds check
   if ((blk_addr + blk_len) > s_block_count) {
     return USBD_FAIL;
@@ -330,6 +329,20 @@ int8_t STORAGE_GetMaxLun_FS(void)
   return (STORAGE_LUN_NBR - 1);
   /* USER CODE END 8 */
 }
+
+/* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+/* Allow application to control media ready flag and capacity */
+void STORAGE_SetMediaReady(uint8_t ready)
+{
+  s_media_ready = ready ? 1 : 0;
+}
+
+void STORAGE_UpdateCapacity(uint32_t bytes)
+{
+  s_flash_capacity_bytes = bytes;
+  s_block_count = s_flash_capacity_bytes / STORAGE_BLK_SIZ;
+}
+/* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */

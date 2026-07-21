@@ -2,6 +2,7 @@
 "./Core/Src/TM1637.o"
 "./Core/Src/ds3231.o"
 "./Core/Src/main.o"
+"./Core/Src/staging.o"
 "./Core/Src/stm32f4xx_hal_msp.o"
 "./Core/Src/stm32f4xx_it.o"
 "./Core/Src/syscalls.o"
