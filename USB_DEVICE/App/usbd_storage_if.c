@@ -94,6 +94,8 @@ const int8_t STORAGE_Inquirydata_FS[] = {
 // Auto-detected flash capacity
 static uint32_t s_flash_capacity_bytes = 0;
 static uint32_t s_block_count = 0;
+// Media ready flag set at init to avoid slow checks in IsReady
+static volatile uint8_t s_media_ready = 0;
 
 // Static buffer for read-modify-write (one W25Q sector = 4KB)
 static uint8_t sector_buf[4096];
@@ -162,16 +164,32 @@ int8_t STORAGE_Init_FS(uint8_t lun)
   /* USER CODE BEGIN 2 */
   UNUSED(lun);
 
-  // Detect flash capacity from ID
-  uint32_t flash_id = W25Q64_ReadID();
-  uint8_t cap_byte = flash_id & 0xFF;
+  // Prefer using flash size detected by FATFS diskio layer if available
+  extern uint32_t USER_GetFlashTotalSize(void);
+  uint32_t fsz = USER_GetFlashTotalSize();
+  if (fsz > 0) {
+    s_flash_capacity_bytes = fsz;
+  } else {
+    // Fallback: detect flash capacity from ID
+    uint32_t flash_id = W25Q64_ReadID();
+    uint8_t cap_byte = flash_id & 0xFF;
 
-  if (cap_byte == 0x17)      s_flash_capacity_bytes = 8  * 1024 * 1024;   // W25Q64
-  else if (cap_byte == 0x18) s_flash_capacity_bytes = 16 * 1024 * 1024;   // W25Q128
-  else if (cap_byte == 0x19) s_flash_capacity_bytes = 32 * 1024 * 1024;   // W25Q256
-  else                       s_flash_capacity_bytes = 8  * 1024 * 1024;   // Default
+    if (cap_byte == 0x17)      s_flash_capacity_bytes = 8  * 1024 * 1024;   // W25Q64
+    else if (cap_byte == 0x18) s_flash_capacity_bytes = 16 * 1024 * 1024;   // W25Q128
+    else if (cap_byte == 0x19) s_flash_capacity_bytes = 32 * 1024 * 1024;   // W25Q256
+    else                       s_flash_capacity_bytes = 8  * 1024 * 1024;   // Default
+  }
 
   s_block_count = s_flash_capacity_bytes / STORAGE_BLK_SIZ;
+
+  {
+    char dbg[80]; sprintf(dbg, "STORAGE_Init_FS: cap=%lu bytes blocks=%lu\r\n",
+                           (unsigned long)s_flash_capacity_bytes, (unsigned long)s_block_count);
+    UART_Print(dbg);
+  }
+
+  // Mark media ready for fast IsReady responses
+  s_media_ready = (s_block_count > 0) ? 1 : 0;
 
   return (USBD_OK);
   /* USER CODE END 2 */
@@ -188,24 +206,26 @@ int8_t STORAGE_GetCapacity_FS(uint8_t lun, uint32_t *block_num, uint16_t *block_
 {
   /* USER CODE BEGIN 3 */
   UNUSED(lun);
-
-  *block_num  = s_block_count;
+  // USB MSC expects the last valid LBA (block count - 1)
+  if (s_block_count == 0) return USBD_FAIL;
+  *block_num  = s_block_count - 1;
   *block_size = STORAGE_BLK_SIZ;
+  {
+    char dbg[80]; sprintf(dbg, "STORAGE_GetCapacity_FS: last_lba=%lu blk_size=%u\r\n",
+                           (unsigned long)*block_num, (unsigned int)*block_size);
+    UART_Print(dbg);
+  }
   return (USBD_OK);
   /* USER CODE END 3 */
 }
-
-/**
-  * @brief   Checks whether the medium is ready.
-  * @param  lun:  Logical unit number.
-  * @retval USBD_OK if all operations are OK else USBD_FAIL
-  */
 int8_t STORAGE_IsReady_FS(uint8_t lun)
 {
   /* USER CODE BEGIN 4 */
   UNUSED(lun);
-
-  return (USBD_OK);
+  // Small delay to allow flash / SPI to settle when host probes
+  // Return cached readiness set during STORAGE_Init_FS to avoid blocking USB stack
+  if (s_media_ready) return USBD_OK;
+  return USBD_FAIL;
   /* USER CODE END 4 */
 }
 

@@ -52,6 +52,8 @@
 ../Middlewares/Third_Party/FatFs/src/ff.c:4525:9:f_unlink	15
 ../Middlewares/Third_Party/FatFs/src/ff.c:4620:9:f_mkdir	16
 ../Middlewares/Third_Party/FatFs/src/ff.c:4717:9:f_rename	18
+../Middlewares/Third_Party/FatFs/src/ff.c:4919:9:f_getlabel	14
+../Middlewares/Third_Party/FatFs/src/ff.c:5013:9:f_setlabel	23
 ../Middlewares/Third_Party/FatFs/src/ff.c:5301:9:f_mkfs	70
 ../Middlewares/Third_Party/FatFs/src/ff.c:5830:8:f_gets	6
 ../Middlewares/Third_Party/FatFs/src/ff.c:5917:6:putc_bfd	5

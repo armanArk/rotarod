@@ -5,6 +5,7 @@
   * @brief   Rotarod + FatFs on W25Q Flash + USB MSC
   *          - CSV visible in Windows Explorer
   *          - Auto unmount/mount on USB plug/unplug
+  *          - Auto-reformat if FS size != flash size
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -73,11 +74,13 @@ static void Display_SetBrightness(uint8_t idx, uint8_t brightness) {
 }
 
 // FatFs
-FATFS FatFs;
+/* Use FatFs objects provided by MX_FATFS (USERFatFS/USERPath) */
+extern FATFS USERFatFS;
 FIL csv_file;
 UINT bw;
 FRESULT fr;
 static uint8_t fs_mounted = 0, fs_formatted = 0;
+static uint32_t flash_capacity_bytes = 0;
 
 typedef struct { uint32_t timestamp; uint16_t duration_ms, rpm; uint8_t lane; } FallEvent_t;
 static FallEvent_t event_queue[MAX_EVENTS];
@@ -108,10 +111,14 @@ void UART_Print(char *msg);
 
 static void MountFS(void) {
     if (fs_mounted) return;
-    fr = f_mount(&FatFs, "", 1);
+    fr = f_mount(&USERFatFS, USERPath, 1);
     if (fr == FR_OK) {
         fs_mounted = 1;
         UART_Print("FatFS mounted OK\r\n");
+            // Ensure volume label is ROTAROD
+            FRESULT lab_fr = f_setlabel("ROTAROD");
+            if (lab_fr == FR_OK) UART_Print("Volume label set to ROTAROD\r\n");
+            else { char msg[48]; sprintf(msg, "Set label err: %d\r\n", lab_fr); UART_Print(msg); }
     } else if (fr == FR_NO_FILESYSTEM) {
         UART_Print("No FS - needs format\r\n");
     } else {
@@ -121,9 +128,23 @@ static void MountFS(void) {
 
 static void UnmountFS(void) {
     if (!fs_mounted) return;
-    f_mount(NULL, "", 0);
+    f_mount(NULL, USERPath, 0);
     fs_mounted = 0;
     UART_Print("FatFS unmounted\r\n");
+}
+
+static uint8_t VerifyBootSector(void) {
+    uint8_t boot[512];
+    W25Q64_ReadData(0, boot, 512);
+    // Check boot signature 0x55 0xAA at offset 510-511
+    if (boot[510] == 0x55 && boot[511] == 0xAA) {
+        UART_Print("Boot sector valid (0x55AA)\r\n");
+        return 1;
+    }
+    char dbg[48];
+    sprintf(dbg, "Boot sector invalid: %02X %02X\r\n", boot[510], boot[511]);
+    UART_Print(dbg);
+    return 0;
 }
 
 static void FormatFS(void) {
@@ -132,25 +153,165 @@ static void FormatFS(void) {
     W25Q64_ChipErase();
     UART_Print("Chip erase done\r\n");
 
+    // Clear FatFs cache
+    f_mount(NULL, USERPath, 0);
+    fs_mounted = 0;
+
     BYTE work[_MAX_SS];
-    fr = f_mkfs("", FM_FAT32, 0, work, sizeof(work));
-    if (fr == FR_OK) {
-        UART_Print("Format FAT32 OK\r\n");
-        fs_formatted = 1; MountFS();
-    } else {
-        fr = f_mkfs("", FM_FAT, 0, work, sizeof(work));
-        if (fr == FR_OK) {
-            UART_Print("Format FAT16 OK\r\n");
-            fs_formatted = 1; MountFS();
-        } else {
-            char msg[32]; sprintf(msg, "Format failed: %d\r\n", fr); UART_Print(msg);
+    FRESULT fmt_fr;
+
+    // Attempt 1: FM_ANY (auto FAT12/16/32) - best for 8-32MB
+    // First try: superfloppy (no MBR) so USB host sees FS at LBA0
+    UART_Print("Trying FM_ANY|FM_SFD (superfloppy)...\r\n");
+    fmt_fr = f_mkfs(USERPath, FM_ANY | FM_SFD, 0, work, sizeof(work));
+    if (fmt_fr != FR_OK) {
+        UART_Print("Trying FM_ANY...\r\n");
+        fmt_fr = f_mkfs(USERPath, FM_ANY, 0, work, sizeof(work));
+    }
+    {
+      char dbg[64]; sprintf(dbg, "f_mkfs FM_ANY ret=%d\r\n", fmt_fr); UART_Print(dbg);
+    }
+    if (fmt_fr == FR_OK && VerifyBootSector()) {
+        UART_Print("Format FM_ANY OK\r\n");
+        fs_formatted = 1;
+            // Dump boot sector BPB fields for debugging
+            {
+                uint8_t boot[512];
+                W25Q64_ReadData(0, boot, 512);
+                uint16_t bytes_per_sector = boot[11] | (boot[12] << 8);
+                uint8_t sectors_per_cluster = boot[13];
+                uint16_t reserved_sectors = boot[14] | (boot[15] << 8);
+                uint8_t num_fats = boot[16];
+                uint16_t root_ent = boot[17] | (boot[18] << 8);
+                uint16_t tot16 = boot[19] | (boot[20] << 8);
+                uint32_t tot32 = boot[32] | (boot[33] << 8) | (boot[34] << 16) | (boot[35] << 24);
+                uint32_t total_sectors_bpb = tot16 ? tot16 : tot32;
+                char dbg[128];
+                sprintf(dbg, "BPB: bps=%u spc=%u rsv=%u fats=%u root=%u tot=%lu\r\n",
+                        bytes_per_sector, sectors_per_cluster, reserved_sectors,
+                        num_fats, root_ent, (unsigned long)total_sectors_bpb);
+                UART_Print(dbg);
+
+                // Hexdump first 64 bytes
+                for (int ln = 0; ln < 64; ln += 16) {
+                    char line[96]; char *p = line; int off = 0;
+                    off += sprintf(p + off, "%02X: ", ln);
+                    for (int j = 0; j < 16; j++) off += sprintf(p + off, "%02X ", boot[ln + j]);
+                    off += sprintf(p + off, "\r\n");
+                    UART_Print(line);
+                }
+            }
+        // Try mounting a few times to allow driver/media settle
+        for (int i = 0; i < 5; i++) {
+            fr = f_mount(&USERFatFS, USERPath, 1);
+            if (fr == FR_OK) {
+                fs_mounted = 1; UART_Print("FatFS mounted OK\r\n");
+                    // set volume label
+                    FRESULT lab_fr = f_setlabel("ROTAROD");
+                    if (lab_fr == FR_OK) UART_Print("Volume label set to ROTAROD\r\n");
+                    else { char msg[48]; sprintf(msg, "Set label err: %d\r\n", lab_fr); UART_Print(msg); }
+                // Print FS details
+                DWORD fre_clust; FATFS *fs_tmp;
+                if (f_getfree(USERPath, &fre_clust, &fs_tmp) == FR_OK) {
+                    DWORD fs_sectors = (fs_tmp->n_fatent - 2) * fs_tmp->csize;
+                    char dbg[256]; sprintf(dbg, "Mounted FS: n_fatent=%lu csize=%lu total_sectors=%lu\r\n",
+                                            fs_tmp->n_fatent, fs_tmp->csize, fs_sectors);
+                    UART_Print(dbg);
+                    sprintf(dbg, "FS layout: volbase=%lu fatbase=%lu dirbase=%lu database=%lu fsize=%lu\r\n",
+                            fs_tmp->volbase, fs_tmp->fatbase, fs_tmp->dirbase, fs_tmp->database, fs_tmp->fsize);
+                    UART_Print(dbg);
+
+                    // Dump BPB at volume base (in case it's not LBA 0)
+                    uint8_t vol_boot[512];
+                    uint32_t vol_addr = fs_tmp->volbase * 512UL;
+                    W25Q64_ReadData(vol_addr, vol_boot, 512);
+                    sprintf(dbg, "BPB at volbase (%lu): bps=%u spc=%u rsv=%u fats=%u root=%u tot16=%u tot32=%lu\r\n",
+                            (unsigned long)fs_tmp->volbase,
+                            vol_boot[11] | (vol_boot[12] << 8), vol_boot[13], vol_boot[14] | (vol_boot[15]<<8),
+                            vol_boot[16], vol_boot[17] | (vol_boot[18]<<8),
+                            (unsigned long)(vol_boot[32] | (vol_boot[33]<<8) | (vol_boot[34]<<16) | (vol_boot[35]<<24)));
+                    UART_Print(dbg);
+                    for (int ln = 0; ln < 64; ln += 16) {
+                        char line[96]; int off = 0;
+                        off += sprintf(line + off, "%02X: ", ln);
+                        for (int j = 0; j < 16; j++) off += sprintf(line + off, "%02X ", vol_boot[ln + j]);
+                        off += sprintf(line + off, "\r\n");
+                        UART_Print(line);
+                    }
+                }
+                break;
+            }
+            HAL_Delay(50);
         }
+        if (!fs_mounted) {
+            char msg[48]; sprintf(msg, "Mount after format failed: %d\r\n", fr); UART_Print(msg);
+        }
+        return;
+    }
+
+    // Attempt 2: FM_FAT32 (force FAT32) as superfloppy
+    UART_Print("Trying FM_FAT32|FM_SFD...\r\n");
+    fmt_fr = f_mkfs(USERPath, FM_FAT32 | FM_SFD, 0, work, sizeof(work));
+    if (fmt_fr != FR_OK) {
+        UART_Print("Trying FM_FAT32...\r\n");
+        fmt_fr = f_mkfs(USERPath, FM_FAT32, 0, work, sizeof(work));
+    }
+    if (fmt_fr == FR_OK && VerifyBootSector()) {
+        UART_Print("Format FAT32 OK\r\n");
+        fs_formatted = 1;
+        MountFS();
+        return;
+    }
+
+    // Attempt 3: FM_FAT (FAT12/16) with au=8 (4KB clusters), prefer superfloppy
+    UART_Print("Trying FM_FAT|FM_SFD au=8...\r\n");
+    fmt_fr = f_mkfs(USERPath, FM_FAT | FM_SFD, 8, work, sizeof(work));
+    if (fmt_fr != FR_OK) {
+        UART_Print("Trying FM_FAT au=8...\r\n");
+        fmt_fr = f_mkfs(USERPath, FM_FAT, 8, work, sizeof(work));
+    }
+    if (fmt_fr == FR_OK && VerifyBootSector()) {
+        UART_Print("Format FAT16 OK\r\n");
+        fs_formatted = 1;
+        MountFS();
+        return;
+    }
+
+    char msg[48];
+    sprintf(msg, "All format attempts failed, last: %d\r\n", fmt_fr);
+    UART_Print(msg);
+}
+
+static void CheckAndFormatIfMismatch(void) {
+    if (!fs_mounted || flash_capacity_bytes == 0) return;
+
+    DWORD fre_clust;
+    FATFS *fs_ptr;
+        if (f_getfree(USERPath, &fre_clust, &fs_ptr) != FR_OK) return;
+
+        DWORD fs_total_sectors = (fs_ptr->n_fatent - 2) * fs_ptr->csize;
+        DWORD expected_sectors = flash_capacity_bytes / 512;
+
+        char dbg[120];
+        sprintf(dbg, "FS sectors: %lu / expected: %lu (n_fatent=%lu csize=%lu)\r\n",
+            fs_total_sectors, expected_sectors, fs_ptr->n_fatent, fs_ptr->csize);
+        UART_Print(dbg);
+
+    // Allow tolerance up to one large erase block (64KB = 128 sectors) to account
+    // for alignment differences from mkfs.
+    const DWORD allowed_diff_sectors = 128;
+    if (fs_total_sectors < (expected_sectors - allowed_diff_sectors)) {
+        UART_Print("FS size mismatch! Reformatting...\r\n");
+        UnmountFS();
+        FormatFS();
+    } else {
+        UART_Print("FS size OK\r\n");
     }
 }
 
 static void WriteCSVHeader(void) {
     if (!fs_mounted) return;
-    fr = f_open(&csv_file, "events.csv", FA_WRITE | FA_CREATE_ALWAYS);
+        fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
     if (fr == FR_OK) {
         char header[] = "timestamp,duration_ms,rpm,lane\r\n";
         f_write(&csv_file, header, strlen(header), &bw);
@@ -164,7 +325,7 @@ static void WriteCSVHeader(void) {
 
 static void AppendCSVLine(FallEvent_t *ev) {
     if (!fs_mounted) return;
-    fr = f_open(&csv_file, "events.csv", FA_WRITE | FA_OPEN_APPEND);
+        fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
     if (fr == FR_OK) {
         char line[64];
         int len = sprintf(line, "%lu,%u,%u,%u\r\n", ev->timestamp, ev->duration_ms, ev->rpm, ev->lane);
@@ -197,7 +358,7 @@ static void Log_FlushToCSV(void) {
 
 static void Log_ReadCSV(void) {
     if (!fs_mounted) { UART_Print("FS not mounted\r\n"); return; }
-    fr = f_open(&csv_file, "events.csv", FA_READ);
+        fr = f_open(&csv_file, "ROTAROD.CSV", FA_READ);
     if (fr == FR_OK) {
         char buf[256]; UINT br;
         UART_Print("\r\n=== CSV ===\r\n");
@@ -223,8 +384,9 @@ int main(void)
     MX_TIM5_Init();
     MX_USART1_UART_Init();
     MX_TIM4_Init();
-    MX_USB_DEVICE_Init();
+    /* Initialize FatFs (disk detection) before USB so MSC reports correct capacity */
     MX_FATFS_Init();
+    MX_USB_DEVICE_Init();
 
     // 74HC165
     HC165_SetPins(SHIFT_PL_GPIO_Port, SHIFT_PL_Pin, SHIFT_CP_GPIO_Port, SHIFT_CP_Pin,
@@ -268,15 +430,20 @@ int main(void)
 
     uint32_t flash_id = W25Q64_ReadID();
     uint8_t cap_byte = flash_id & 0xFF;
-    uint32_t capacity_mb = (cap_byte == 0x17) ? 8 : (cap_byte == 0x18) ? 16 : (cap_byte == 0x19) ? 32 : 0;
+    flash_capacity_bytes = (cap_byte == 0x17) ? 8*1024*1024 :
+                           (cap_byte == 0x18) ? 16*1024*1024 :
+                           (cap_byte == 0x19) ? 32*1024*1024 : 8*1024*1024;
     char id_buf[80];
-    if (capacity_mb) sprintf(id_buf, "Flash ID: 0x%06lX (%lu MB)\r\n", flash_id, capacity_mb);
-    else sprintf(id_buf, "Flash ID: 0x%06lX (unknown)\r\n", flash_id);
+    sprintf(id_buf, "Flash ID: 0x%06lX (%lu MB)\r\n", flash_id, flash_capacity_bytes/(1024*1024));
     UART_Print(id_buf);
 
     // Mount or format FatFs
     MountFS();
-    if (!fs_mounted && !fs_formatted) FormatFS();
+    if (!fs_mounted && !fs_formatted) {
+        FormatFS();
+    } else if (fs_mounted) {
+        CheckAndFormatIfMismatch();
+    }
 
     // RTC
     DS3231_Init();

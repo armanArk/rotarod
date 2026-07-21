@@ -55,6 +55,10 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+void UART_Print(char *msg);
+/* USER CODE END EFP */
+
+/* USER CODE BEGIN EFP */
 
 /* USER CODE END EFP */
 

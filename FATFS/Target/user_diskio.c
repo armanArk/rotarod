@@ -14,9 +14,11 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include <string.h>
+#include <stdio.h>
 #include "ff_gen_drv.h"
-#include "diskio.h"       // <-- TAMBAH INI: DSTATUS, DRESULT, BYTE, DWORD, UINT
-#include "w25q64.h"       // <-- TAMBAH INI: W25Q64 driver
+#include "diskio.h"       // DSTATUS, DRESULT, BYTE, DWORD, UINT
+#include "w25q64.h"       // W25Q64 driver
+#include "main.h"         // UART_Print()
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -27,6 +29,13 @@
 static volatile DSTATUS Stat = STA_NOINIT;
 static uint8_t sector_buffer[FLASH_SECTOR_SIZE];
 static uint32_t flash_total_size = 0;
+
+/**
+ * Expose detected flash size for other modules (bytes)
+ */
+uint32_t USER_GetFlashTotalSize(void) {
+  return flash_total_size;
+}
 
 /* Private function prototypes -----------------------------------------------*/
 DSTATUS USER_initialize (BYTE pdrv);
@@ -79,6 +88,13 @@ DSTATUS USER_initialize (BYTE pdrv)
   uint8_t sr = W25Q64_ReadStatusRegister1();
   if (sr != 0x00) {
       W25Q64_WriteStatusRegister1(0x00);
+  }
+
+  // Debug: report detected flash size
+  {
+    char dbg[64];
+    sprintf(dbg, "user_diskio: flash_total_size=%lu bytes\r\n", flash_total_size);
+    UART_Print(dbg);
   }
 
   Stat = 0;  // STA_OK
@@ -196,17 +212,32 @@ DRESULT USER_ioctl (BYTE pdrv, BYTE cmd, void *buff)
 
     case GET_SECTOR_COUNT:
       *(DWORD *)buff = flash_total_size / FLASH_BLOCK_SIZE;
+      {
+        char dbg[64];
+        sprintf(dbg, "IOCTL: GET_SECTOR_COUNT=%lu\r\n", *(DWORD *)buff);
+        UART_Print(dbg);
+      }
       res = RES_OK;
       break;
 
     case GET_SECTOR_SIZE:
       *(WORD *)buff = FLASH_BLOCK_SIZE;
+      {
+        char dbg[64];
+        sprintf(dbg, "IOCTL: GET_SECTOR_SIZE=%u\r\n", *(WORD *)buff);
+        UART_Print(dbg);
+      }
       res = RES_OK;
       break;
 
     case GET_BLOCK_SIZE:
       // Number of sectors per erase block (for erase alignment)
       *(DWORD *)buff = FLASH_SECTOR_SIZE / FLASH_BLOCK_SIZE; // 8
+      {
+        char dbg[64];
+        sprintf(dbg, "IOCTL: GET_BLOCK_SIZE=%lu\r\n", *(DWORD *)buff);
+        UART_Print(dbg);
+      }
       res = RES_OK;
       break;
 
