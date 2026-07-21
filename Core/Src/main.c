@@ -24,6 +24,7 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 /* Control MSC readiness/capacity in USB storage layer */
 extern void STORAGE_SetMediaReady(uint8_t ready);
 extern void STORAGE_UpdateCapacity(uint32_t bytes);
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -485,6 +486,8 @@ int main(void)
     // Initialize staging area for queued writes while USB attached
     if (staging_init() == 0) UART_Print("Staging initialized\r\n");
 
+    // Independent watchdog disabled for now (HAL IWDG header not present)
+
     // Logging
     Log_Init();
 
@@ -590,6 +593,16 @@ int main(void)
             UART_Print(uart_buf);
             last_debug_tick = HAL_GetTick();
         }
+
+        // Heartbeat every 500ms
+        static uint32_t last_heartbeat = 0;
+        if (HAL_GetTick() - last_heartbeat >= 500) {
+            // minimal heartbeat
+            UART_Print(".");
+            last_heartbeat = HAL_GetTick();
+        }
+
+        // Watchdog refresh removed (IWDG disabled in this build)
 
         // ADC & PWM
         static uint32_t last_adc_tick = 0;
@@ -788,8 +801,47 @@ static void MX_GPIO_Init(void)
     HAL_GPIO_WritePin(DISP_CLK7_GPIO_Port, DISP_CLK7_Pin, GPIO_PIN_SET);
 }
 
+// Non-blocking UART logger using interrupt-driven transmit and circular buffer
+#define UART_BUF_SIZE 4096
+static uint8_t uart_buf[UART_BUF_SIZE];
+static volatile uint32_t uart_head = 0; // write index
+static volatile uint32_t uart_tail = 0; // read index
+static volatile uint8_t uart_tx_busy = 0;
+
+static void uart_start_tx_if_needed(void);
+
 void UART_Print(char *msg) {
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+    uint32_t len = strlen(msg);
+    // If message too large, truncate
+    if (len == 0) return;
+    // Drop message if not enough space to keep non-blocking
+    uint32_t free_space = (uart_tail + UART_BUF_SIZE - uart_head - 1) % UART_BUF_SIZE;
+    if (len > free_space) return; // drop
+    for (uint32_t i = 0; i < len; i++) {
+        uart_buf[uart_head] = (uint8_t)msg[i];
+        uart_head = (uart_head + 1) % UART_BUF_SIZE;
+    }
+    // Start TX if idle
+    uart_start_tx_if_needed();
+}
+
+static void uart_start_tx_if_needed(void) {
+    if (uart_tx_busy) return;
+    if (uart_tail == uart_head) return; // empty
+    uint32_t chunk_len = (uart_head > uart_tail) ? (uart_head - uart_tail) : (UART_BUF_SIZE - uart_tail);
+    uart_tx_busy = 1;
+    HAL_UART_Transmit_IT(&huart1, &uart_buf[uart_tail], (uint16_t)chunk_len);
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance != USART1) return;
+    // advance tail by last transmitted amount
+    // HAL stores transferred size in huart->TxXferSize; use that
+    uint32_t sent = huart->TxXferSize;
+    uart_tail = (uart_tail + sent) % UART_BUF_SIZE;
+    uart_tx_busy = 0;
+    // start next chunk if available
+    uart_start_tx_if_needed();
 }
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)

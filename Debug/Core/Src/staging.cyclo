@@ -3,4 +3,4 @@
 ../Core/Src/staging.c:49:12:staging_write_sector	2
 ../Core/Src/staging.c:58:5:staging_append	3
 ../Core/Src/staging.c:105:5:staging_has_entries	1
-../Core/Src/staging.c:109:5:staging_commit	8
+../Core/Src/staging.c:109:5:staging_commit	11

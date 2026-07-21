@@ -127,12 +127,31 @@ int staging_commit(void) {
         // Append payload to CSV
         fr = f_open(&f, "ROTAROD.CSV", FA_OPEN_APPEND | FA_WRITE);
         if (fr == FR_OK) {
-            f_write(&f, sector + 16, len, &bw);
+            fr = f_write(&f, sector + 16, len, &bw);
+            if (fr != FR_OK || bw != len) {
+                char dbg[96]; sprintf(dbg, "Staging write failed idx=%lu fr=%d bw=%lu expected=%lu\r\n",
+                                       (unsigned long)i, fr, (unsigned long)bw, (unsigned long)len);
+                UART_Print(dbg);
+                f_close(&f);
+                return -2;
+            }
+            // ensure data flushed
+            #if FF_FS_REENTRANT || 1
+            f_sync(&f);
+            #endif
             f_close(&f);
+            char dbg2[80]; sprintf(dbg2, "Staging wrote %lu bytes\r\n", (unsigned long)bw); UART_Print(dbg2);
         } else {
             char dbg[64]; sprintf(dbg, "Staging replay open err: %d\r\n", fr); UART_Print(dbg);
             return -1;
         }
+    }
+
+    // After successful replay, report file size and then clear staging
+    FILINFO finfo;
+    if (f_stat("ROTAROD.CSV", &finfo) == FR_OK) {
+        char dbg3[96]; sprintf(dbg3, "ROTAROD.CSV size after commit: %lu bytes\r\n", (unsigned long)finfo.fsize);
+        UART_Print(dbg3);
     }
 
     // Clear header marking entries consumed
