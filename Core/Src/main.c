@@ -24,6 +24,7 @@
 #include "usbd_core.h"
 #include "staging.h"
 #include "settings.h"
+#include "eeprom.h"
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
 /* Control MSC readiness/capacity in USB storage layer */
@@ -159,18 +160,24 @@ int main(void)
     sprintf(id_buf, "Flash ID: 0x%06lX (%lu MB)\r\n", flash_id, flash_cap/(1024*1024));
     UART_Print(id_buf);
 
-    // Mount FatFs (formatting can be triggered on-demand via FTDI command "FORMAT")
+    // Mount FatFs
     MountFS();
     if (!FS_IsMounted() && !FS_IsFormatted()) {
         UART_Print("Flash is completely empty. Performing one-time format...\r\n");
         FormatFS();
+    } else {
+        // Automatically reformat if still using the old 2-partition structure
+        CheckAndFormatIfMismatch();
     }
 
-    // RTC
+
+    // RTC and EEPROM
     DS3231_Init();
+    EEPROM_Init();
 
     // Initialize staging area for queued writes while USB attached
     if (staging_init() == 0) UART_Print("Staging initialized\r\n");
+
 
     // Independent watchdog: simple register-based init (avoids HAL IWDG dependency)
     Simple_IWDG_Init();
