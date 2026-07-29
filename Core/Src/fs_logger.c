@@ -86,32 +86,18 @@ void FormatFS(void) {
         return;
     }
 
-    UART_Print("Formatting 1 partition...\r\n");
+    UART_Print("Formatting 1 partition (SFD)...\r\n");
     BYTE work[_MAX_SS];
     FRESULT fmt_fr;
-    DWORD part_sizes[2] = {0, 0};
-    DWORD total_sectors = flash_capacity_bytes / 512;
     
-    part_sizes[0] = total_sectors;
-    part_sizes[1] = 0;
+    // Map logical drive 0 to entire physical drive (SFD, no MBR)
+    extern PARTITION VolToPart[];
+    VolToPart[0].pt = 0;
 
     char dbg[96];
-    sprintf(dbg, "Partition size: %lu sectors\r\n", part_sizes[0]);
+    fmt_fr = f_mkfs(USERPath, FM_ANY | FM_SFD, 0, work, sizeof(work));
+    sprintf(dbg, "f_mkfs(0:) ret=%d\r\n", fmt_fr);
     UART_Print(dbg);
-
-    fmt_fr = f_fdisk(0, part_sizes, work);
-    sprintf(dbg, "f_fdisk ret=%d\r\n", fmt_fr);
-    UART_Print(dbg);
-
-    if (fmt_fr == FR_OK) {
-        // Map logical drive 0 to partition 1
-        extern PARTITION VolToPart[];
-        VolToPart[0].pt = 1;
-
-        fmt_fr = f_mkfs(USERPath, FM_ANY | FM_FAT32, 0, work, sizeof(work));
-        sprintf(dbg, "f_mkfs(0:) ret=%d\r\n", fmt_fr);
-        UART_Print(dbg);
-    }
 
     if (fmt_fr == FR_OK && VerifyBootSector()) {
         UART_Print("Single-partition format OK\r\n");
@@ -142,38 +128,36 @@ void FormatFS(void) {
 }
 
 void CheckAndFormatIfMismatch(void) {
-    uint32_t capacity = FS_GetFlashCapacity();
-    if (capacity == 0) {
-        UART_Print("Flash capacity 0, skipping check\r\n");
+    if (!fs_mounted) {
+        UART_Print("Check: FS not mounted\r\n");
         return;
     }
 
-    uint8_t mbr[512];
-    W25Q64_ReadData(0, mbr, 512);
-
-    if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
-        UART_Print("No valid MBR signature, formatting...\r\n");
+    DWORD fre_clust;
+    FATFS *fs_ptr;
+    if (f_getfree(USERPath, &fre_clust, &fs_ptr) != FR_OK) {
+        UART_Print("Check: f_getfree failed, formatting...\r\n");
         FormatFS();
         return;
     }
 
-    const uint8_t *pte = &mbr[446];
-    uint32_t sector_count = (uint32_t)pte[12] | ((uint32_t)pte[13] << 8) |
-                            ((uint32_t)pte[14] << 16) | ((uint32_t)pte[15] << 24);
+    DWORD fs_total_sectors = (fs_ptr->n_fatent - 2) * fs_ptr->csize;
+    DWORD expected_sectors = FS_GetFlashCapacity() / 512;
 
-    uint32_t expected_sectors = capacity / 512;
-    // Allow a small margin of error (e.g., 100 sectors)
-    uint32_t diff = (sector_count > expected_sectors) ? (sector_count - expected_sectors) : (expected_sectors - sector_count);
+    uint32_t diff = (fs_total_sectors > expected_sectors) ? 
+                    (fs_total_sectors - expected_sectors) : (expected_sectors - fs_total_sectors);
 
     char dbg[96];
-    sprintf(dbg, "Check: p1_sectors=%lu expected=%lu\r\n", sector_count, expected_sectors);
+    sprintf(dbg, "Check: FS sectors=%lu expected=%lu\r\n", fs_total_sectors, expected_sectors);
     UART_Print(dbg);
 
-    if (diff > 100) {
-        UART_Print("Capacity mismatch, reformatting for 1 partition...\r\n");
+    // Allow margin for FAT overhead (boot sector, FAT tables)
+    if (diff > 500) {
+        UART_Print("Capacity mismatch, reformatting SFD...\r\n");
+        UnmountAllFS();
         FormatFS();
     } else {
-        UART_Print("Partition matches full capacity, skip format\r\n");
+        UART_Print("Capacity matches, skip format\r\n");
     }
 }
 
