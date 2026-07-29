@@ -4,9 +4,13 @@
 #include "settings.h"
 #include <string.h>
 #include <stdio.h>
+#include "ds3231.h"
+#include "ui.h"
 #include <ctype.h>
+#include <stdlib.h>
 
 extern UART_HandleTypeDef huart1;
+extern LaneState_t lanes[5];
 
 /* ==================== TX Non-blocking Logger ==================== */
 #define UART_BUF_SIZE 4096
@@ -93,8 +97,8 @@ void USART1_Rx_ISR(void) {
 }
 
 void ProcessUartRxCommand(void) {
-    // If no newline was sent, auto-complete command after 200ms of inactivity
-    if (!rx_cmd_ready && rx_cmd_idx > 0 && (HAL_GetTick() - rx_last_char_tick >= 200)) {
+    // If no newline was sent, auto-complete command after 3000ms of inactivity
+    if (!rx_cmd_ready && rx_cmd_idx > 0 && (HAL_GetTick() - rx_last_char_tick >= 3000)) {
         rx_cmd_buf[rx_cmd_idx] = '\0';
         strncpy(pending_cmd, rx_cmd_buf, sizeof(pending_cmd) - 1);
         pending_cmd[sizeof(pending_cmd) - 1] = '\0';
@@ -134,8 +138,14 @@ void ProcessUartRxCommand(void) {
             if (ki_f < 0) ki_f = -ki_f;
             if (kd_f < 0) kd_f = -kd_f;
             
+            Motor_SetPID(kp, ki, kd);
+            
+            MotorSettings s;
+            uint32_t hc165_en = 1;
+            if (Settings_Load(&s)) hc165_en = s.hc165_enabled;
+
             char msg[120];
-            if (Settings_Save(kp, ki, kd)) {
+            if (Settings_Save(kp, ki, kd, hc165_en)) {
                 sprintf(msg, "\r\n[FTDI Command] PID updated and saved to Flash: Kp=%d.%d, Ki=%d.%d, Kd=%d.%d\r\n", 
                         kp_i, kp_f, ki_i, ki_f, kd_i, kd_f);
             } else {
@@ -146,7 +156,12 @@ void ProcessUartRxCommand(void) {
         } else if (strcmp(cmd, "SAVE") == 0) {
             float kp, ki, kd;
             Motor_GetPID(&kp, &ki, &kd);
-            if (Settings_Save(kp, ki, kd)) {
+            
+            MotorSettings s;
+            uint32_t hc165_en = 1;
+            if (Settings_Load(&s)) hc165_en = s.hc165_enabled;
+
+            if (Settings_Save(kp, ki, kd, hc165_en)) {
                 int kp_i = (int)kp, kp_f = (int)((kp-(int)kp)*100);
                 int ki_i = (int)ki, ki_f = (int)((ki-(int)ki)*100);
                 int kd_i = (int)kd, kd_f = (int)((kd-(int)kd)*100);
@@ -207,6 +222,73 @@ void ProcessUartRxCommand(void) {
                 sprintf(msg, "\r\n[CLI] Target RPM diset ke: %lu\r\n", target);
                 UART_Print(msg);
             }
+        } else if (strncmp(cmd, "TIME ", 5) == 0) {
+            char *p = pending_cmd + 5;
+            int hh, mm, ss, d, m, y;
+            if (sscanf(p, "%d %d %d %d %d %d", &hh, &mm, &ss, &d, &m, &y) == 6) {
+                // Day of week (1-7) can be set to 1 since we don't actively use it
+                DS3231_SetTime((uint8_t)ss, (uint8_t)mm, (uint8_t)hh, 1, (uint8_t)d, (uint8_t)m, (uint8_t)y);
+                char msg[80];
+                sprintf(msg, "\r\n[RTC] Waktu berhasil diset: %02d:%02d:%02d %02d/%02d/20%02d\r\n", hh, mm, ss, d, m, y);
+                UART_Print(msg);
+            } else {
+                UART_Print("\r\n[Error] Format salah! Gunakan: TIME HH MM SS DD MM YY\r\n");
+            }
+        } else if (strcmp(cmd, "HC165 ON") == 0 || strcmp(cmd, "HC165 OFF") == 0) {
+            uint32_t enable = (strcmp(cmd, "HC165 ON") == 0) ? 1 : 0;
+            float kp, ki, kd;
+            Motor_GetPID(&kp, &ki, &kd);
+            if (Settings_Save(kp, ki, kd, enable)) {
+                if (enable) UART_Print("\r\n[HC165] Input tombol & sensor AKTIF (disimpan ke Flash).\r\n");
+                else        UART_Print("\r\n[HC165] Input tombol & sensor DISABLED (disimpan ke Flash).\r\n");
+            } else {
+                UART_Print("\r\n[HC165] GAGAL menyimpan ke Flash!\r\n");
+            }
+        } else if (strcmp(cmd, "TESTEVENT") == 0) {
+            UART_Print("\r\n[CLI] Mensimulasikan event jatuhnya tikus (Dummy)...\r\n");
+            Log_AddEvent(1000 + (rand() % 2001), Motor_GetRPM(), 3);
+            Log_FlushToCSV();
+            UART_Print("[CLI] Simulasi dummy event selesai.\r\n");
+        } else if (strcmp(cmd, "TRIGGER") == 0) {
+            int random_lane = rand() % 5; // 0 sampai 4
+            UI_TriggerFall(random_lane);
+            Log_FlushToCSV();
+            char msg[100];
+            sprintf(msg, "\r\n[CLI] Berhasil: Lane %d, Durasi: %lu ms -> disimpan ke CSV.\r\n", 
+                    random_lane + 1, (unsigned long)lanes[random_lane].duration_ms);
+            UART_Print(msg);
+        } else if (strncmp(cmd, "START ", 6) == 0) {
+            char *p = pending_cmd + 6;
+            int lane = atoi(p);
+            if (lane >= 1 && lane <= 5) {
+                if (UI_StartLane(lane - 1)) {
+                    char msg[80];
+                    sprintf(msg, "\r\n[CLI] Berhasil: Timer Lane %d mulai berjalan.\r\n", lane);
+                    UART_Print(msg);
+                } else {
+                    char msg[80];
+                    sprintf(msg, "\r\n[Error] Gagal: Lane %d sudah dalam keadaan RUNNING.\r\n", lane);
+                    UART_Print(msg);
+                }
+            } else {
+                UART_Print("\r\n[Error] Lane tidak valid! Gunakan format: START 1 sampai START 5\r\n");
+            }
+        } else if (strncmp(cmd, "STOP ", 5) == 0) {
+            char *p = pending_cmd + 5;
+            int lane = atoi(p);
+            if (lane >= 1 && lane <= 5) {
+                if (UI_StopLane(lane - 1)) {
+                    char msg[80];
+                    sprintf(msg, "\r\n[CLI] Berhasil: Timer Lane %d dihentikan.\r\n", lane);
+                    UART_Print(msg);
+                } else {
+                    char msg[80];
+                    sprintf(msg, "\r\n[Error] Gagal: Lane %d sedang tidak berjalan.\r\n", lane);
+                    UART_Print(msg);
+                }
+            } else {
+                UART_Print("\r\n[Error] Lane tidak valid! Gunakan format: STOP 1 sampai STOP 5\r\n");
+            }
         } else if (strcmp(cmd, "HELP") == 0) {
             UART_Print("\r\n=== FTDI Commands ===\r\n"
                        "  MODE PID              : Potensiometer -> Target RPM -> PID\r\n"
@@ -214,6 +296,12 @@ void ProcessUartRxCommand(void) {
                        "  MODE CLI              : CLI kontrol penuh via perintah RPM\r\n"
                        "  RPM <nilai>           : Set target RPM (hanya di MODE CLI)\r\n"
                        "  PID <Kp> <Ki> <Kd>   : Tune parameter PID\r\n"
+                       "  TIME <HH> <MM> <SS> <DD> <MM> <YY> : Set RTC DS3231 time\r\n"
+                       "  HC165 ON / OFF        : Aktifkan/Matikan input sensor (EEPROM)\r\n"
+                       "  TESTEVENT             : Simulasi dummy event (langsung ke CSV)\r\n"
+                       "  START <1-5>           : Memulai timer Lane (simulasi tombol onboard Start)\r\n"
+                       "  STOP <1-5>            : Mematikan timer Lane (simulasi tombol onboard Stop)\r\n"
+                       "  TRIGGER               : Tembakkan dummy jatuh (Lane acak, Waktu acak)\r\n"
                        "  FORMAT / FDISK        : Format flash 2 partisi (50%/50%)\r\n"
                        "  CHECKFS               : Verifikasi ukuran partisi\r\n"
                        "  HELP                  : Tampilkan daftar perintah\r\n");

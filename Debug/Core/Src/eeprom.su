@@ -1,0 +1,4 @@
+../Core/Src/eeprom.c:12:6:EEPROM_Init	64	static
+../Core/Src/eeprom.c:30:9:EEPROM_IsReady	4	static
+../Core/Src/eeprom.c:34:6:EEPROM_Read	32	static
+../Core/Src/eeprom.c:41:6:EEPROM_Write	40	static

@@ -5,7 +5,7 @@
 #include "fs_logger.h"
 #include <stdlib.h>
 
-#define HC165_NUM_CHIPS     3
+#define HC165_NUM_CHIPS     4
 #define HC165_TOTAL_PINS    (HC165_NUM_CHIPS * 8)
 #define NUM_DISPLAYS        7
 #define DISPLAY_UPDATE_MS   100
@@ -41,71 +41,198 @@ static void Display_SetBrightness(uint8_t idx, uint8_t brightness) {
     TM1637_SetBrightness(clk_ports[idx], clk_pins[idx], dio_ports[idx], dio_pins[idx], brightness);
 }
 
+extern LaneState_t lanes[5];
+LaneState_t lanes[5];
+
 void UI_Init(void) {
     for (uint8_t i = 0; i < NUM_DISPLAYS; i++) Display_SetBrightness(i, 4);
-    for (uint8_t i = 0; i < NUM_DISPLAYS; i++) Display_ShowNumber(i, (i+1)*1111, 0);
+    for (uint8_t i = 0; i < NUM_DISPLAYS; i++) Display_ShowNumber(i, 0, 0);
+    
+    for (int i = 0; i < 5; i++) {
+        lanes[i].status = LANE_IDLE;
+        lanes[i].duration_ms = 0;
+        lanes[i].prev_btn_start = 0;
+        lanes[i].prev_btn_stop = 0;
+        lanes[i].prev_btn_reset = 0;
+        lanes[i].prev_ext_btn = 0;
+        lanes[i].prev_magnet = 0;
+        lanes[i].last_magnet_tick = 0;
+    }
 }
 
 void UI_Process(void) {
     static uint32_t last_button_read_tick = 0;
     static uint32_t last_display_tick = 0;
-    static uint8_t prev_fall = 0;
-    static uint32_t last_fall_time = 0;
 
     // Shift register
     if (HAL_GetTick() - last_button_read_tick >= BUTTON_READ_MS) {
         HC165_Read(status_tombol, HC165_NUM_CHIPS);
         HC165_Unpack(status_tombol, pins, HC165_NUM_CHIPS);
         last_button_read_tick = HAL_GetTick();
-    }
+        
+        // Cek apakah input HC165 dimatikan dari EEPROM (untuk mencegah noise)
+        #include "settings.h"
+        MotorSettings s;
+        uint32_t hc165_en = 1; // Default nyala
+        if (Settings_Load(&s)) hc165_en = s.hc165_enabled;
 
-    // Fall simulation (rising edge + debounce)
-    if (pins[0] && !prev_fall && (HAL_GetTick() - last_fall_time > FALL_DEBOUNCE_MS)) {
-        Log_AddEvent(1000 + (rand() % 2001), Motor_GetRPM(), 3);
-        last_fall_time = HAL_GetTick();
-    }
-    prev_fall = pins[0];
+        // Pin mapping berdasarkan skematik hardware fisik
+        const uint8_t map_start[5]  = {0, 3, 6, 9, 12};
+        const uint8_t map_stop[5]   = {1, 4, 7, 10, 13};
+        const uint8_t map_reset[5]  = {2, 5, 8, 11, 14};
+        const uint8_t map_magnet[5] = {15, 16, 17, 18, 19};
+        const uint8_t map_detect[5] = {20, 21, 22, 23, 24};
+        const uint8_t map_ext[5]    = {25, 26, 27, 28, 29};
 
-    // Flush: D1 IC A
-    if (pins[1]) {
-        static uint32_t last_flush = 0;
-        if (HAL_GetTick() - last_flush > 300) { Log_FlushToCSV(); last_flush = HAL_GetTick(); }
-    }
+        if (hc165_en) {
+            for (int i = 0; i < 5; i++) {
+            uint8_t btn_start = pins[map_start[i]];
+            uint8_t btn_stop  = pins[map_stop[i]];
+            uint8_t btn_reset = pins[map_reset[i]];
+            uint8_t magnet    = pins[map_magnet[i]];
+            uint8_t cable_det = pins[map_detect[i]]; // LOW (0) = connected
+            uint8_t ext_btn   = pins[map_ext[i]];
 
-    // Read CSV: D2 IC A
-    if (pins[2]) {
-        static uint32_t last_read = 0;
-        if (HAL_GetTick() - last_read > 300) { Log_ReadCSV(); last_read = HAL_GetTick(); }
-    }
+            uint8_t start_edge = (btn_start && !lanes[i].prev_btn_start);
+            uint8_t stop_edge  = (btn_stop && !lanes[i].prev_btn_stop);
+            uint8_t ext_edge   = (ext_btn && !lanes[i].prev_ext_btn);
+            uint8_t reset_edge = (btn_reset && !lanes[i].prev_btn_reset);
+            uint8_t magnet_edge= (magnet && !lanes[i].prev_magnet);
 
-    // Display update (100ms) - Target RPM
+            lanes[i].prev_btn_start = btn_start;
+            lanes[i].prev_btn_stop  = btn_stop;
+            lanes[i].prev_btn_reset = btn_reset;
+            lanes[i].prev_ext_btn   = ext_btn;
+            lanes[i].prev_magnet    = magnet;
+
+            uint8_t trigger_start = 0;
+            uint8_t trigger_stop  = 0;
+
+            if (cable_det == 0) {
+                // Cable connected: Onboard buttons ignored. Ext button toggles.
+                if (ext_edge) {
+                    if (lanes[i].status == LANE_IDLE || lanes[i].status == LANE_STOPPED) {
+                        trigger_start = 1;
+                    } else if (lanes[i].status == LANE_RUNNING) {
+                        trigger_stop = 1;
+                    }
+                }
+            } else {
+                // Cable disconnected: Onboard buttons active.
+                if (start_edge) trigger_start = 1;
+                if (stop_edge)  trigger_stop = 1;
+            }
+
+            // Execute Start
+            if (trigger_start && lanes[i].status != LANE_RUNNING) {
+                lanes[i].status = LANE_RUNNING;
+                lanes[i].start_tick = HAL_GetTick();
+                lanes[i].duration_ms = 0;
+            }
+
+            // Execute Stop (Button/Ext or Magnet)
+            uint8_t fall_detected = (magnet_edge && (HAL_GetTick() - lanes[i].last_magnet_tick > FALL_DEBOUNCE_MS));
+            
+            if ((trigger_stop || fall_detected) && lanes[i].status == LANE_RUNNING) {
+                lanes[i].status = LANE_STOPPED;
+                lanes[i].duration_ms = HAL_GetTick() - lanes[i].start_tick;
+                
+                if (fall_detected) {
+                    Log_AddEvent(lanes[i].duration_ms, Motor_GetRPM(), i + 1);
+                    lanes[i].last_magnet_tick = HAL_GetTick();
+                }
+            }
+
+            // Execute Reset (only if not running)
+            if (reset_edge && lanes[i].status != LANE_RUNNING) {
+                lanes[i].status = LANE_IDLE;
+                lanes[i].duration_ms = 0;
+            }
+        } // End of for loop
+    } // End of if (hc165_en)
+    } // End of HAL_GetTick()
+    
+    // Displays Update (100ms)
     if (HAL_GetTick() - last_display_tick >= DISPLAY_UPDATE_MS) {
-        Display_ShowNumber(2, (uint16_t)Motor_GetSetValue(), 0); // Display 2 = Target RPM
+        
+        // 1. Lane Timers (Displays 0 to 4) format MM:SS
+        for (int i = 0; i < 5; i++) {
+            uint32_t current_ms = lanes[i].duration_ms;
+            if (lanes[i].status == LANE_RUNNING) {
+                current_ms = HAL_GetTick() - lanes[i].start_tick;
+            }
+            
+            uint32_t total_sec = current_ms / 1000;
+            uint16_t mm = total_sec / 60;
+            uint16_t ss = total_sec % 60;
+            if (mm > 99) mm = 99; // cap display to 99:59
+            
+            uint16_t disp_val = (mm * 100) + ss;
+            // Show colon dots (0x02 enables the colon on standard TM1637)
+            Display_ShowNumber(i, disp_val, 2); 
+        }
+        
+        // 2. Set RPM (Display 6)
+        Display_ShowNumber(6, (uint16_t)Motor_GetSetValue(), 0);
+        
         last_display_tick = HAL_GetTick();
     }
-
-    // Display 1 (merah) = Actual RPM, diperbarui setiap 2 detik dengan rata-rata
+    
+    // Actual RPM Display (Display 5), perbarui setiap 2 detik dengan rata-rata
     static float rpm_sum = 0;
     static uint32_t rpm_sample_count = 0;
     static uint32_t last_rpm_sample_tick = 0;
     static uint32_t last_avg_display_tick = 0;
 
-    // Kumpulkan sample setiap 100ms
     if (HAL_GetTick() - last_rpm_sample_tick >= DISPLAY_UPDATE_MS) {
         rpm_sum += Motor_GetPreciseOutputRPM();
         rpm_sample_count++;
         last_rpm_sample_tick = HAL_GetTick();
     }
 
-    // Setiap 2 detik, hitung rata-rata lalu tampilkan
     if (HAL_GetTick() - last_avg_display_tick >= 2000) {
-        // Tampilkan RPM bulat, karena hardware display hanya mendukung titik dua (colon)
         uint16_t avg_rpm = (rpm_sample_count > 0) ? (uint16_t)(rpm_sum / (float)rpm_sample_count + 0.5f) : 0;
-        
-        Display_ShowNumber(1, avg_rpm, 0); 
+        Display_ShowNumber(5, avg_rpm, 0); 
         
         rpm_sum = 0;
         rpm_sample_count = 0;
         last_avg_display_tick = HAL_GetTick();
     }
+}
+
+bool UI_TriggerFall(uint8_t lane_index) {
+    if (lane_index >= 5) return false;
+    
+    if (lanes[lane_index].status == LANE_RUNNING) {
+        lanes[lane_index].status = LANE_STOPPED;
+        lanes[lane_index].duration_ms = HAL_GetTick() - lanes[lane_index].start_tick;
+    } else {
+        // Jika sedang tidak berjalan, buat durasi dummy secara acak agar cepat
+        lanes[lane_index].duration_ms = 1000 + (rand() % 5000); 
+    }
+    
+    Log_AddEvent(lanes[lane_index].duration_ms, Motor_GetRPM(), lane_index + 1);
+    lanes[lane_index].last_magnet_tick = HAL_GetTick();
+    return true;
+}
+
+bool UI_StartLane(uint8_t lane_index) {
+    if (lane_index >= 5) return false;
+    if (lanes[lane_index].status != LANE_RUNNING) {
+        lanes[lane_index].status = LANE_RUNNING;
+        lanes[lane_index].start_tick = HAL_GetTick();
+        lanes[lane_index].duration_ms = 0;
+        return true;
+    }
+    return false;
+}
+
+bool UI_StopLane(uint8_t lane_index) {
+    if (lane_index >= 5) return false;
+    if (lanes[lane_index].status == LANE_RUNNING) {
+        lanes[lane_index].status = LANE_STOPPED;
+        lanes[lane_index].duration_ms = HAL_GetTick() - lanes[lane_index].start_tick;
+        return true;
+    }
+    return false;
 }

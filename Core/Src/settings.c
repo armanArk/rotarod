@@ -42,13 +42,14 @@ bool Settings_Load(MotorSettings *out) {
     return true;
 }
 
-bool Settings_Save(float kp, float ki, float kd) {
+bool Settings_Save(float kp, float ki, float kd, uint32_t hc165_enabled) {
     MotorSettings s;
     memset(&s, 0, sizeof(s));
     s.magic    = SETTINGS_MAGIC;
     s.kp       = kp;
     s.ki       = ki;
     s.kd       = kd;
+    s.hc165_enabled = hc165_enabled;
     s.checksum = calc_checksum(&s);
 
     HAL_FLASH_Unlock();

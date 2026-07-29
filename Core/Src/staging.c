@@ -4,10 +4,19 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "eeprom.h"
+
 /* RAM-backed staging buffer (avoids using tail of flash, which overlaps FAT partitions). */
 
 #define STAGING_MAX_ENTRIES 64
-#define STAGING_MAX_LEN     128
+#define STAGING_MAX_LEN     48
+
+#define EEPROM_MAGIC_1 0xEE
+#define EEPROM_MAGIC_2 0x11
+#define ADDR_MAGIC     0x0000
+#define ADDR_COUNT     0x0002
+#define ADDR_LENGTHS   0x0010
+#define ADDR_PAYLOADS  (ADDR_LENGTHS + (STAGING_MAX_ENTRIES * 4))
 
 static uint8_t s_payloads[STAGING_MAX_ENTRIES][STAGING_MAX_LEN];
 static uint32_t s_lengths[STAGING_MAX_ENTRIES];
@@ -15,6 +24,26 @@ static uint32_t s_count = 0;
 
 int staging_init(void) {
     s_count = 0;
+    
+    if (EEPROM_IsReady()) {
+        uint8_t magic[2];
+        EEPROM_Read(ADDR_MAGIC, magic, 2);
+        
+        if (magic[0] == EEPROM_MAGIC_1 && magic[1] == EEPROM_MAGIC_2) {
+            uint8_t count = 0;
+            EEPROM_Read(ADDR_COUNT, &count, 1);
+            if (count > 0 && count <= STAGING_MAX_ENTRIES) {
+                s_count = count;
+                EEPROM_Read(ADDR_LENGTHS, (uint8_t*)s_lengths, count * 4);
+                EEPROM_Read(ADDR_PAYLOADS, (uint8_t*)s_payloads, count * STAGING_MAX_LEN);
+                
+                char dbg[64];
+                sprintf(dbg, "Restored %d events from EEPROM\r\n", count);
+                UART_Print(dbg);
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -24,6 +53,19 @@ int staging_append(const uint8_t *data, uint32_t len) {
 
     memcpy(s_payloads[s_count], data, len);
     s_lengths[s_count] = len;
+    
+    if (EEPROM_IsReady()) {
+        if (s_count == 0) {
+            uint8_t magic[2] = {EEPROM_MAGIC_1, EEPROM_MAGIC_2};
+            EEPROM_Write(ADDR_MAGIC, magic, 2);
+        }
+        EEPROM_Write(ADDR_PAYLOADS + (s_count * STAGING_MAX_LEN), data, len);
+        EEPROM_Write(ADDR_LENGTHS + (s_count * 4), (uint8_t*)&s_lengths[s_count], 4);
+        
+        uint8_t count = s_count + 1;
+        EEPROM_Write(ADDR_COUNT, &count, 1);
+    }
+
     s_count++;
     return 0;
 }
@@ -69,6 +111,12 @@ int staging_commit(void) {
         UART_Print(dbg);
     }
 
+    if (EEPROM_IsReady()) {
+        uint8_t count = 0;
+        EEPROM_Write(ADDR_COUNT, &count, 1);
+    }
+
     s_count = 0;
     return 0;
 }
+

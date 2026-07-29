@@ -30,8 +30,8 @@ FIL USERFile;         /* File object for USER */
 
 #if _MULTI_PARTITION
 PARTITION VolToPart[_VOLUMES] = {
-    {0, 1},   /* 0: event log partition */
-    {0, 2}    /* 1: export partition for USB */
+    {0, 0},   /* 0: auto-detect (SFD or first MBR partition) */
+    {0, 2}    /* 1: (unused) */
 };
 #endif
 

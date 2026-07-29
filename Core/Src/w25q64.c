@@ -79,8 +79,8 @@ void W25Q64_WaitBusy(void) {
         // Refresh Independent Watchdog untuk mencegah reset saat operasi flash lama
         IWDG->KR = 0xAAAA;
 
-        // Safety timeout (misal 30 detik max untuk Chip Erase)
-        if ((HAL_GetTick() - start_tick) > 30000) {
+        // Safety timeout (misal 120 detik max untuk Chip Erase)
+        if ((HAL_GetTick() - start_tick) > 120000) {
             break;
         }
     }

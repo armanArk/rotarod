@@ -42,7 +42,7 @@ Core/Src/fs_logger.o: ../Core/Src/fs_logger.c ../Core/Inc/fs_logger.h \
  ../Middlewares/Third_Party/FatFs/src/diskio.h \
  ../Middlewares/Third_Party/FatFs/src/ff.h ../FATFS/Target/user_diskio.h \
  ../Core/Inc/w25q64.h ../Core/Inc/main.h ../Core/Inc/staging.h \
- ../Core/Inc/cli.h
+ ../Core/Inc/cli.h ../Core/Inc/ds3231.h
 ../Core/Inc/fs_logger.h:
 ../FATFS/App/fatfs.h:
 ../Middlewares/Third_Party/FatFs/src/ff.h:
@@ -94,3 +94,4 @@ Core/Src/fs_logger.o: ../Core/Src/fs_logger.c ../Core/Inc/fs_logger.h \
 ../Core/Inc/main.h:
 ../Core/Inc/staging.h:
 ../Core/Inc/cli.h:
+../Core/Inc/ds3231.h:

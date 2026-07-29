@@ -233,7 +233,7 @@ int8_t STORAGE_IsWriteProtected_FS(uint8_t lun)
   /* USER CODE BEGIN 5 */
   UNUSED(lun);
 
-  return 1;  // 1 = Write Protected (Read Only untuk PC)
+  return 0;  // 0 = Not Write Protected (Read/Write enabled)
   /* USER CODE END 5 */
 }
 

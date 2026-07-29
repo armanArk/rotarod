@@ -165,9 +165,6 @@ int main(void)
     if (!FS_IsMounted() && !FS_IsFormatted()) {
         UART_Print("Flash is completely empty. Performing one-time format...\r\n");
         FormatFS();
-    } else {
-        // Automatically reformat if still using the old 2-partition structure
-        CheckAndFormatIfMismatch();
     }
 
 

@@ -42,7 +42,8 @@ Core/Src/cli.o: ../Core/Src/cli.c ../Core/Inc/cli.h ../Core/Inc/main.h \
  ../Core/Inc/main.h ../Middlewares/Third_Party/FatFs/src/ff_gen_drv.h \
  ../Middlewares/Third_Party/FatFs/src/diskio.h \
  ../Middlewares/Third_Party/FatFs/src/ff.h ../FATFS/Target/user_diskio.h \
- ../Core/Inc/motor_control.h ../Core/Inc/settings.h
+ ../Core/Inc/motor_control.h ../Core/Inc/settings.h ../Core/Inc/ds3231.h \
+ ../Core/Inc/ui.h
 ../Core/Inc/cli.h:
 ../Core/Inc/main.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h:
@@ -94,3 +95,5 @@ Core/Src/cli.o: ../Core/Src/cli.c ../Core/Inc/cli.h ../Core/Inc/main.h \
 ../FATFS/Target/user_diskio.h:
 ../Core/Inc/motor_control.h:
 ../Core/Inc/settings.h:
+../Core/Inc/ds3231.h:
+../Core/Inc/ui.h:

@@ -1,4 +1,7 @@
 ../Core/Src/ui.c:34:13:Display_ShowNumber	2
 ../Core/Src/ui.c:39:13:Display_SetBrightness	2
-../Core/Src/ui.c:44:6:UI_Init	3
-../Core/Src/ui.c:49:6:UI_Process	13
+../Core/Src/ui.c:47:6:UI_Init	4
+../Core/Src/ui.c:63:6:UI_Process	39
+../Core/Src/ui.c:203:6:UI_TriggerFall	3
+../Core/Src/ui.c:219:6:UI_StartLane	3
+../Core/Src/ui.c:230:6:UI_StopLane	3

@@ -5,6 +5,7 @@
 #include "cli.h"
 #include <string.h>
 #include <stdio.h>
+#include "ds3231.h"
 
 #define MAX_EVENTS          400
 #define MBR_PARTITION2_PTE  462U
@@ -19,7 +20,7 @@ static FRESULT fr;
 static uint8_t fs_mounted = 0, fs_formatted = 0;
 static uint32_t flash_capacity_bytes = 0;
 
-typedef struct { uint32_t timestamp; uint16_t duration_ms, rpm; uint8_t lane; } FallEvent_t;
+typedef struct { char timestamp[24]; uint32_t duration_ms; uint16_t rpm; uint8_t lane; } FallEvent_t;
 static FallEvent_t event_queue[MAX_EVENTS];
 static uint16_t event_count = 0;
 static uint8_t csv_header_written = 0;
@@ -78,7 +79,7 @@ static uint8_t VerifyBootSector(void) {
 }
 
 void FormatFS(void) {
-    UART_Print("Formatting flash with 2 partitions (50%/50%)...\r\n");
+    UART_Print("Starting full flash format...\r\n");
     UART_Print("Chip erase (wait ~10-20s)...\r\n");
     W25Q64_ChipErase();
     if (flash_capacity_bytes == 0) {
@@ -86,18 +87,35 @@ void FormatFS(void) {
         return;
     }
 
-    UART_Print("Formatting 1 partition (SFD)...\r\n");
+    UART_Print("Formatting 1 partition (MBR)...\r\n");
     BYTE work[_MAX_SS];
     FRESULT fmt_fr;
+    DWORD part_sizes[2] = {0, 0};
+    DWORD total_sectors = flash_capacity_bytes / 512;
     
-    // Map logical drive 0 to entire physical drive (SFD, no MBR)
-    extern PARTITION VolToPart[];
-    VolToPart[0].pt = 0;
+    part_sizes[0] = total_sectors;
+    part_sizes[1] = 0;
 
     char dbg[96];
-    fmt_fr = f_mkfs(USERPath, FM_ANY | FM_SFD, 0, work, sizeof(work));
-    sprintf(dbg, "f_mkfs(0:) ret=%d\r\n", fmt_fr);
+    sprintf(dbg, "Partition size: %lu sectors\r\n", part_sizes[0]);
     UART_Print(dbg);
+
+    fmt_fr = f_fdisk(0, part_sizes, work);
+    sprintf(dbg, "f_fdisk ret=%d\r\n", fmt_fr);
+    UART_Print(dbg);
+
+    if (fmt_fr == FR_OK) {
+        // Temporarily force FatFs to format Partition 1 (MBR format) instead of SFD
+        extern PARTITION VolToPart[];
+        VolToPart[0].pt = 1;
+        
+        fmt_fr = f_mkfs(USERPath, FM_ANY | FM_FAT32, 0, work, sizeof(work));
+        sprintf(dbg, "f_mkfs(0:) ret=%d\r\n", fmt_fr);
+        UART_Print(dbg);
+        
+        // Restore to auto-detect mode so it mounts anything Windows creates
+        VolToPart[0].pt = 0;
+    }
 
     if (fmt_fr == FR_OK && VerifyBootSector()) {
         UART_Print("Single-partition format OK\r\n");
@@ -128,59 +146,43 @@ void FormatFS(void) {
 }
 
 void CheckAndFormatIfMismatch(void) {
-    if (!fs_mounted) {
-        UART_Print("Check: FS not mounted\r\n");
+    uint32_t capacity = FS_GetFlashCapacity();
+    if (capacity == 0) {
+        UART_Print("Flash capacity 0, skipping check\r\n");
         return;
     }
 
-    DWORD fre_clust;
-    FATFS *fs_ptr;
-    if (f_getfree(USERPath, &fre_clust, &fs_ptr) != FR_OK) {
-        UART_Print("Check: f_getfree failed, formatting...\r\n");
+    uint8_t mbr[512];
+    W25Q64_ReadData(0, mbr, 512);
+
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
+        UART_Print("No valid MBR signature, formatting...\r\n");
         FormatFS();
         return;
     }
 
-    DWORD fs_total_sectors = (fs_ptr->n_fatent - 2) * fs_ptr->csize;
-    DWORD expected_sectors = FS_GetFlashCapacity() / 512;
+    const uint8_t *pte = &mbr[446];
+    uint32_t sector_count = (uint32_t)pte[12] | ((uint32_t)pte[13] << 8) |
+                            ((uint32_t)pte[14] << 16) | ((uint32_t)pte[15] << 24);
 
-    uint32_t diff = (fs_total_sectors > expected_sectors) ? 
-                    (fs_total_sectors - expected_sectors) : (expected_sectors - fs_total_sectors);
+    uint32_t expected_sectors = capacity / 512;
+    // Allow a small margin of error for MBR overhead
+    uint32_t diff = (sector_count > expected_sectors) ? (sector_count - expected_sectors) : (expected_sectors - sector_count);
 
     char dbg[96];
-    sprintf(dbg, "Check: FS sectors=%lu expected=%lu\r\n", fs_total_sectors, expected_sectors);
+    sprintf(dbg, "Check: p1_sectors=%lu expected=%lu\r\n", sector_count, expected_sectors);
     UART_Print(dbg);
 
-    // Allow margin for FAT overhead (boot sector, FAT tables)
-    if (diff > 500) {
-        UART_Print("Capacity mismatch, reformatting SFD...\r\n");
+    if (diff > 4000) {
+        UART_Print("Capacity mismatch, reformatting for 1 partition...\r\n");
         UnmountAllFS();
         FormatFS();
     } else {
-        UART_Print("Capacity matches, skip format\r\n");
+        UART_Print("Partition matches full capacity, skip format\r\n");
     }
 }
 
-static void WriteCSVHeader(void) {
-    if (!fs_mounted) {
-        const char header[] = "timestamp,duration_ms,rpm,lane\r\n";
-        staging_append((const uint8_t*)header, (uint32_t)strlen(header));
-        csv_header_written = 1;
-        UART_Print("CSV header staged\r\n");
-        return;
-    }
-    fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
-    if (fr == FR_OK) {
-        char header[] = "timestamp,duration_ms,rpm,lane\r\n";
-        f_write(&csv_file, header, strlen(header), &bw);
-        f_close(&csv_file);
-        csv_header_written = 1;
-        UART_Print("CSV header written\r\n");
-    } else {
-        char msg[32]; sprintf(msg, "CSV create err: %d\r\n", fr); UART_Print(msg);
-    }
-}
-
+// WriteCSVHeader removed, checking f_size directly inside Log_FlushToCSV instead
 
 
 void Log_Init(void) { 
@@ -188,15 +190,22 @@ void Log_Init(void) {
     csv_header_written = 0; 
 }
 
-void Log_AddEvent(uint16_t duration_ms, uint16_t rpm_val, uint8_t lane) {
+void Log_AddEvent(uint32_t duration_ms, uint16_t rpm_val, uint8_t lane) {
     if (event_count >= MAX_EVENTS) { UART_Print("Queue full!\r\n"); return; }
     FallEvent_t *ev = &event_queue[event_count++];
-    ev->timestamp = HAL_GetTick() / 1000;
+    
+    uint8_t sec, min, hour, day, date, month, year;
+    DS3231_ReadTime(&sec, &min, &hour, &day, &date, &month, &year);
+    // TRICK: Separate date and time with a comma so they fall into two different columns
+    // TRICK 2: Wrap the date in ="..." to force Excel to read it as TEXT so it never shows #######
+    // TRICK 3: Shorten date to DD/MM/YY (8 characters) so it fits perfectly inside Excel's default 8.43 column width!
+    sprintf(ev->timestamp, "=\"%02d/%02d/%02d\",%02d:%02d:%02d", date, month, year, hour, min, sec);
+    
     ev->duration_ms = duration_ms;
     ev->rpm = rpm_val;
     ev->lane = lane;
-    char msg[64];
-    sprintf(msg, "Event: dur=%u, rpm=%u, lane=%u\r\n", duration_ms, rpm_val, lane);
+    char msg[128];
+    sprintf(msg, "Event: time=%s, dur=%lu, rpm=%u, lane=%u\r\n", ev->timestamp, (unsigned long)duration_ms, rpm_val, lane);
     UART_Print(msg);
 }
 
@@ -208,15 +217,19 @@ void Log_FlushToCSV(void) {
         return;
     }
 
-    if (!csv_header_written) WriteCSVHeader();
-
     fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
     if (fr == FR_OK) {
+        if (f_size(&csv_file) == 0) {
+            char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (ms),RPM,Lane\r\n";
+            f_write(&csv_file, header, strlen(header), &bw);
+            csv_header_written = 1;
+            UART_Print("CSV header written\r\n");
+        }
         for (int i = 0; i < event_count; i++) {
-            char line[64];
-            int len = sprintf(line, "%lu,%u,%u,%u\r\n", 
+            char line[128];
+            int len = sprintf(line, "%s,%lu,%u,%u\r\n", 
                               event_queue[i].timestamp, 
-                              event_queue[i].duration_ms, 
+                              (unsigned long)event_queue[i].duration_ms, 
                               event_queue[i].rpm, 
                               event_queue[i].lane);
             f_write(&csv_file, line, len, &bw);
@@ -233,9 +246,17 @@ void Log_FlushToCSV(void) {
 
 void Log_StageEvents(void) {
     if (event_count == 0) { UART_Print("No events to stage.\r\n"); return; }
+    
+    if (!csv_header_written) {
+        const char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (ms),RPM,Lane\r\n";
+        staging_append((const uint8_t*)header, (uint32_t)strlen(header));
+        csv_header_written = 1;
+        UART_Print("CSV header staged\r\n");
+    }
+
     for (int i = 0; i < event_count; i++) {
-        char line[64];
-        int len = sprintf(line, "%lu,%u,%u,%u\r\n", event_queue[i].timestamp, event_queue[i].duration_ms, event_queue[i].rpm, event_queue[i].lane);
+        char line[128];
+        int len = sprintf(line, "%s,%lu,%u,%u\r\n", event_queue[i].timestamp, (unsigned long)event_queue[i].duration_ms, event_queue[i].rpm, event_queue[i].lane);
         if (staging_append((const uint8_t*)line, (uint32_t)len) != 0) {
             UART_Print("Staging append failed\r\n");
             return;

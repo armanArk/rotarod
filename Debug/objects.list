@@ -2,6 +2,7 @@
 "./Core/Src/TM1637.o"
 "./Core/Src/cli.o"
 "./Core/Src/ds3231.o"
+"./Core/Src/eeprom.o"
 "./Core/Src/fs_logger.o"
 "./Core/Src/main.o"
 "./Core/Src/motor_control.o"
