@@ -233,7 +233,7 @@ int8_t STORAGE_IsWriteProtected_FS(uint8_t lun)
   /* USER CODE BEGIN 5 */
   UNUSED(lun);
 
-  return (USBD_OK);  // 0 = NOT write protected
+  return 1;  // 1 = Write Protected (Read Only untuk PC)
   /* USER CODE END 5 */
 }
 
@@ -263,6 +263,8 @@ int8_t STORAGE_Read_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t bl
   }
 
   W25Q64_ReadData(addr, buf, len);
+
+
   return (USBD_OK);
   /* USER CODE END 6 */
 }

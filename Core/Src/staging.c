@@ -39,15 +39,15 @@ int staging_commit(void) {
     UINT bw;
     FRESULT fr;
 
-    for (uint32_t i = 0; i < s_count; i++) {
-        fr = f_open(&f, "ROTAROD.CSV", FA_OPEN_APPEND | FA_WRITE);
-        if (fr != FR_OK) {
-            char dbg[64];
-            sprintf(dbg, "Staging replay open err: %d\r\n", fr);
-            UART_Print(dbg);
-            return -1;
-        }
+    fr = f_open(&f, "ROTAROD.CSV", FA_OPEN_APPEND | FA_WRITE);
+    if (fr != FR_OK) {
+        char dbg[64];
+        sprintf(dbg, "Staging replay open err: %d\r\n", fr);
+        UART_Print(dbg);
+        return -1;
+    }
 
+    for (uint32_t i = 0; i < s_count; i++) {
         fr = f_write(&f, s_payloads[i], s_lengths[i], &bw);
         if (fr != FR_OK || bw != s_lengths[i]) {
             char dbg[96];
@@ -57,10 +57,10 @@ int staging_commit(void) {
             f_close(&f);
             return -2;
         }
-
-        f_sync(&f);
-        f_close(&f);
     }
+
+    f_sync(&f);
+    f_close(&f);
 
     FILINFO finfo;
     if (f_stat("ROTAROD.CSV", &finfo) == FR_OK) {

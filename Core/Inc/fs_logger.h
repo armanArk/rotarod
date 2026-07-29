@@ -16,8 +16,6 @@ void MountFS(void);
 void UnmountAllFS(void);
 void FormatFS(void);
 void CheckAndFormatIfMismatch(void);
-FRESULT ExportCsvToPartition1(void);
-uint8_t ReadExportPartition(uint32_t *lba_start, uint32_t *sector_count);
 
 uint8_t FS_IsMounted(void);
 uint8_t FS_IsFormatted(void);

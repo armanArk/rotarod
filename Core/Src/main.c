@@ -196,6 +196,17 @@ int main(void)
         }
     }
 
+    typedef enum {
+        USB_SM_IDLE = 0,
+        USB_SM_CONN_START,
+        USB_SM_CONN_EXPORT,
+        USB_SM_CONN_WAIT,
+        USB_SM_DISCONN_START,
+        USB_SM_DISCONN_WAIT
+    } UsbSmState_t;
+    UsbSmState_t usb_sm_state = USB_SM_IDLE;
+    uint32_t usb_sm_tick = 0;
+
     while (1)
     {
         // Process commands over FTDI UART (e.g., "FORMAT", "CHECKFS", "HELP")
@@ -206,15 +217,34 @@ int main(void)
         Motor_Process();
 
         // USB VBUS detection (handled by EXTI or periodic poll)
-        if (vbus_event_pending || (HAL_GetTick() - last_usb_check >= USB_CHECK_MS)) {
-            uint8_t new_usb = HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin);
-            if (HAL_GetTick() < 2000) new_usb = 0; // Ignore VBUS during early boot (debounce brownout)
-            if (new_usb && !last_usb_state) {
-                UART_Print("USB connected - exporting to partition 1\r\n");
+        // Jika sedang idle, kita boleh cek perubahan VBUS
+        if (usb_sm_state == USB_SM_IDLE) {
+            if (vbus_event_pending || (HAL_GetTick() - last_usb_check >= USB_CHECK_MS)) {
+                uint8_t new_usb = HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin);
+                if (HAL_GetTick() < 2000) new_usb = 0; // Ignore VBUS during early boot
+                
+                if (new_usb && !last_usb_state) {
+                    usb_sm_state = USB_SM_CONN_START;
+                } else if (!new_usb && last_usb_state) {
+                    usb_sm_state = USB_SM_DISCONN_START;
+                }
+                
+                last_usb_state = new_usb;
+                usb_connected = new_usb;
+                last_usb_check = HAL_GetTick();
+                vbus_event_pending = 0;
+            }
+        }
+
+        // USB State Machine (Non-Blocking)
+        switch (usb_sm_state) {
+            case USB_SM_IDLE:
+                break;
+
+            case USB_SM_CONN_START:
+                UART_Print("USB connected - exposing flash\r\n");
                 STORAGE_SetMediaReady(0);
-
                 if (!FS_IsMounted()) MountFS();
-
                 if (Log_GetEventCount() > 0) Log_FlushToCSV();
 
                 if (staging_has_entries()) {
@@ -223,38 +253,40 @@ int main(void)
                     else UART_Print("Staging commit failed\r\n");
                 }
 
-                ExportCsvToPartition1();
+                usb_sm_tick = HAL_GetTick();
+                usb_sm_state = USB_SM_CONN_WAIT;
+                break;
 
-                HAL_Delay(50);
-                UnmountAllFS();
+            case USB_SM_CONN_WAIT:
+                if (HAL_GetTick() - usb_sm_tick >= 50) { 
+                    UnmountAllFS();
 
-                uint32_t lba_start = 0, sector_count = 0;
-                if (ReadExportPartition(&lba_start, &sector_count)) {
-                    STORAGE_SetPartitionOffset(lba_start * 512U);
-                    STORAGE_UpdateCapacity(sector_count * 512U);
-                    char dbg[80];
-                    sprintf(dbg, "USB MSC: LBA %lu, %lu sectors\r\n",
-                            (unsigned long)lba_start, (unsigned long)sector_count);
-                    UART_Print(dbg);
-                } else {
-                    STORAGE_SetPartitionOffset(FS_GetFlashCapacity() / 2);
-                    STORAGE_UpdateCapacity(FS_GetFlashCapacity() / 2);
-                    UART_Print("USB MSC: fallback half-flash export\r\n");
+                    STORAGE_SetPartitionOffset(0);
+                    STORAGE_UpdateCapacity(FS_GetFlashCapacity());
+                    UART_Print("USB MSC: Full flash exported\r\n");
+                    
+                    STORAGE_SetMediaReady(1);
+                    usb_sm_state = USB_SM_IDLE;
                 }
-                STORAGE_SetMediaReady(1);
-            } else if (!new_usb && last_usb_state) {
+                break;
+
+            case USB_SM_DISCONN_START:
                 UART_Print("USB disconnected - remounting FS\r\n");
                 STORAGE_SetPartitionOffset(0);
                 STORAGE_UpdateCapacity(FS_GetFlashCapacity());
                 STORAGE_SetMediaReady(0);
-                HAL_Delay(100);
-                MountFS();
-            }
-            last_usb_state = new_usb;
-            usb_connected = new_usb;
-            last_usb_check = HAL_GetTick();
-            vbus_event_pending = 0;
+                usb_sm_tick = HAL_GetTick();
+                usb_sm_state = USB_SM_DISCONN_WAIT;
+                break;
+
+            case USB_SM_DISCONN_WAIT:
+                if (HAL_GetTick() - usb_sm_tick >= 100) { // Pengganti HAL_Delay(100)
+                    MountFS();
+                    usb_sm_state = USB_SM_IDLE;
+                }
+                break;
         }
+
 
         // Debug UART (100 ms)
         if (HAL_GetTick() - last_debug_tick >= 100) {

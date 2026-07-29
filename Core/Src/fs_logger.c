@@ -10,9 +10,8 @@
 #define MBR_PARTITION2_PTE  462U
 
 extern FATFS USERFatFS;
-extern FATFS USERFatFS2;
-extern char USERPath2[4];
 extern char USERPath[4];
+
 
 static FIL csv_file;
 static UINT bw;
@@ -41,85 +40,10 @@ uint8_t FS_IsFormatted(void) {
     return fs_formatted;
 }
 
-uint8_t ReadExportPartition(uint32_t *lba_start, uint32_t *sector_count) {
-    uint8_t mbr[512];
-    W25Q64_ReadData(0, mbr, 512);
-    if (mbr[510] != 0x55 || mbr[511] != 0xAA) return 0;
-
-    const uint8_t *pte = &mbr[MBR_PARTITION2_PTE];
-    if (pte[4] == 0) return 0;
-
-    *lba_start = (uint32_t)pte[8] | ((uint32_t)pte[9] << 8) |
-                 ((uint32_t)pte[10] << 16) | ((uint32_t)pte[11] << 24);
-    *sector_count = (uint32_t)pte[12] | ((uint32_t)pte[13] << 8) |
-                    ((uint32_t)pte[14] << 16) | ((uint32_t)pte[15] << 24);
-    return (*sector_count > 0) ? 1 : 0;
-}
-
 void UnmountAllFS(void) {
     f_mount(NULL, USERPath, 0);
-    f_mount(NULL, USERPath2, 0);
     fs_mounted = 0;
     UART_Print("FatFS unmounted\r\n");
-}
-
-FRESULT ExportCsvToPartition1(void) {
-    FIL src, dst;
-    UINT br, bw_local;
-    uint8_t buf[512];
-    FRESULT res;
-
-    res = f_mount(&USERFatFS2, USERPath2, 1);
-    if (res != FR_OK) {
-        char msg[48];
-        sprintf(msg, "Export mount 1: err: %d\r\n", res);
-        UART_Print(msg);
-        return res;
-    }
-
-    res = f_open(&src, "0:ROTAROD.CSV", FA_READ);
-    if (res == FR_NO_FILE) {
-        res = f_open(&dst, "1:ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
-        if (res == FR_OK) {
-            const char *header = "timestamp,duration_ms,rpm,lane\r\n";
-            f_write(&dst, header, strlen(header), &bw_local);
-            f_sync(&dst);
-            f_close(&dst);
-            UART_Print("Export: empty CSV with header\r\n");
-        }
-        f_mount(NULL, USERPath2, 0);
-        return res;
-    }
-    if (res != FR_OK) {
-        char msg[48];
-        sprintf(msg, "Export open 0: err: %d\r\n", res);
-        UART_Print(msg);
-        f_mount(NULL, USERPath2, 0);
-        return res;
-    }
-
-    res = f_open(&dst, "1:ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
-    if (res != FR_OK) {
-        f_close(&src);
-        f_mount(NULL, USERPath2, 0);
-        return res;
-    }
-
-    while (f_read(&src, buf, sizeof(buf), &br) == FR_OK && br > 0) {
-        if (f_write(&dst, buf, br, &bw_local) != FR_OK || bw_local != br) {
-            res = FR_DISK_ERR;
-            break;
-        }
-    }
-
-    f_close(&src);
-    f_sync(&dst);
-    f_close(&dst);
-    f_mount(NULL, USERPath2, 0);
-
-    if (res == FR_OK) UART_Print("Export to partition 1 OK\r\n");
-    else UART_Print("Export to partition 1 failed\r\n");
-    return res;
 }
 
 void MountFS(void) {
@@ -157,27 +81,22 @@ void FormatFS(void) {
     UART_Print("Formatting flash with 2 partitions (50%/50%)...\r\n");
     UART_Print("Chip erase (wait ~10-20s)...\r\n");
     W25Q64_ChipErase();
-    UART_Print("Chip erase done\r\n");
+    if (flash_capacity_bytes == 0) {
+        UART_Print("Format fail: Capacity 0\r\n");
+        return;
+    }
 
-    // Clear FatFs cache
-    f_mount(NULL, USERPath, 0);
-    f_mount(NULL, USERPath2, 0);
-    fs_mounted = 0;
-
+    UART_Print("Formatting 1 partition...\r\n");
     BYTE work[_MAX_SS];
     FRESULT fmt_fr;
     DWORD part_sizes[2] = {0, 0};
     DWORD total_sectors = flash_capacity_bytes / 512;
-    if (total_sectors > 1) {
-        part_sizes[0] = total_sectors / 2;
-        part_sizes[1] = total_sectors - part_sizes[0];
-    } else {
-        part_sizes[0] = 1;
-        part_sizes[1] = 0;
-    }
+    
+    part_sizes[0] = total_sectors;
+    part_sizes[1] = 0;
 
     char dbg[96];
-    sprintf(dbg, "Partition sizes: %lu / %lu sectors\r\n", part_sizes[0], part_sizes[1]);
+    sprintf(dbg, "Partition size: %lu sectors\r\n", part_sizes[0]);
     UART_Print(dbg);
 
     fmt_fr = f_fdisk(0, part_sizes, work);
@@ -185,24 +104,17 @@ void FormatFS(void) {
     UART_Print(dbg);
 
     if (fmt_fr == FR_OK) {
-        // Map logical drive 0 to partition 1 and logical drive 1 to partition 2.
+        // Map logical drive 0 to partition 1
         extern PARTITION VolToPart[];
         VolToPart[0].pt = 1;
-        VolToPart[1].pt = 2;
 
         fmt_fr = f_mkfs(USERPath, FM_ANY | FM_FAT32, 0, work, sizeof(work));
         sprintf(dbg, "f_mkfs(0:) ret=%d\r\n", fmt_fr);
         UART_Print(dbg);
-
-        if (fmt_fr == FR_OK) {
-            fmt_fr = f_mkfs(USERPath2, FM_ANY | FM_FAT32, 0, work, sizeof(work));
-            sprintf(dbg, "f_mkfs(1:) ret=%d\r\n", fmt_fr);
-            UART_Print(dbg);
-        }
     }
 
     if (fmt_fr == FR_OK && VerifyBootSector()) {
-        UART_Print("Two-partition format OK\r\n");
+        UART_Print("Single-partition format OK\r\n");
         fs_formatted = 1;
 
         for (int i = 0; i < 5; i++) {
@@ -219,50 +131,49 @@ void FormatFS(void) {
             HAL_Delay(50);
         }
 
-        fr = f_mount(&USERFatFS2, USERPath2, 1);
-        if (fr == FR_OK) {
-            UART_Print("Second partition verified\r\n");
-            f_mount(NULL, USERPath2, 0);
-        } else {
-            char msg[64]; sprintf(msg, "Second partition mount err: %d\r\n", fr); UART_Print(msg);
-        }
-
         if (!fs_mounted) {
             char msg[48]; sprintf(msg, "Mount after format failed: %d\r\n", fr); UART_Print(msg);
         }
         return;
     }
 
-    char msg[64];
-    sprintf(msg, "Two-partition format failed, last: %d\r\n", fmt_fr);
-    UART_Print(msg);
+    sprintf(dbg, "Format failed, ret=%d\r\n", fmt_fr);
+    UART_Print(dbg);
 }
 
 void CheckAndFormatIfMismatch(void) {
-    if (!fs_mounted || flash_capacity_bytes == 0) return;
+    uint32_t capacity = FS_GetFlashCapacity();
+    if (capacity == 0) {
+        UART_Print("Flash capacity 0, skipping check\r\n");
+        return;
+    }
 
-    DWORD fre_clust;
-    FATFS *fs_ptr;
-    if (f_getfree(USERPath, &fre_clust, &fs_ptr) != FR_OK) return;
+    uint8_t mbr[512];
+    W25Q64_ReadData(0, mbr, 512);
 
-    DWORD fs_total_sectors = (fs_ptr->n_fatent - 2) * fs_ptr->csize;
-    DWORD expected_sectors = (flash_capacity_bytes / 2) / 512;
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
+        UART_Print("No valid MBR signature, formatting...\r\n");
+        FormatFS();
+        return;
+    }
 
-    char dbg[120];
-    sprintf(dbg, "FS sectors: %lu / expected: %lu (n_fatent=%lu csize=%lu)\r\n",
-        fs_total_sectors, expected_sectors, fs_ptr->n_fatent, fs_ptr->csize);
+    const uint8_t *pte = &mbr[446];
+    uint32_t sector_count = (uint32_t)pte[12] | ((uint32_t)pte[13] << 8) |
+                            ((uint32_t)pte[14] << 16) | ((uint32_t)pte[15] << 24);
+
+    uint32_t expected_sectors = capacity / 512;
+    // Allow a small margin of error (e.g., 100 sectors)
+    uint32_t diff = (sector_count > expected_sectors) ? (sector_count - expected_sectors) : (expected_sectors - sector_count);
+
+    char dbg[96];
+    sprintf(dbg, "Check: p1_sectors=%lu expected=%lu\r\n", sector_count, expected_sectors);
     UART_Print(dbg);
 
-    // Allow tolerance up to one large erase block (64KB = 128 sectors) to account
-    // for alignment differences from mkfs.
-    const DWORD allowed_diff_sectors = 128;
-    if (fs_total_sectors < (expected_sectors - allowed_diff_sectors) ||
-        fs_total_sectors > (expected_sectors + allowed_diff_sectors)) {
-        UART_Print("FS size mismatch! Reformatting...\r\n");
-        UnmountAllFS();
+    if (diff > 100) {
+        UART_Print("Capacity mismatch, reformatting for 1 partition...\r\n");
         FormatFS();
     } else {
-        UART_Print("FS size OK\r\n");
+        UART_Print("Partition matches full capacity, skip format\r\n");
     }
 }
 
@@ -286,19 +197,7 @@ static void WriteCSVHeader(void) {
     }
 }
 
-static void AppendCSVLine(FallEvent_t *ev) {
-    char line[64];
-    int len = sprintf(line, "%lu,%u,%u,%u\r\n", ev->timestamp, ev->duration_ms, ev->rpm, ev->lane);
-    if (!fs_mounted) {
-        staging_append((const uint8_t*)line, (uint32_t)len);
-        return;
-    }
-    fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
-    if (fr == FR_OK) {
-        f_write(&csv_file, line, len, &bw);
-        f_close(&csv_file);
-    }
-}
+
 
 void Log_Init(void) { 
     event_count = 0; 
@@ -319,10 +218,33 @@ void Log_AddEvent(uint16_t duration_ms, uint16_t rpm_val, uint8_t lane) {
 
 void Log_FlushToCSV(void) {
     if (event_count == 0) { UART_Print("No events.\r\n"); return; }
+    
+    if (!fs_mounted) {
+        Log_StageEvents();
+        return;
+    }
+
     if (!csv_header_written) WriteCSVHeader();
-    for (int i = 0; i < event_count; i++) AppendCSVLine(&event_queue[i]);
-    event_count = 0;
-    UART_Print("Flushed to CSV\r\n");
+
+    fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
+    if (fr == FR_OK) {
+        for (int i = 0; i < event_count; i++) {
+            char line[64];
+            int len = sprintf(line, "%lu,%u,%u,%u\r\n", 
+                              event_queue[i].timestamp, 
+                              event_queue[i].duration_ms, 
+                              event_queue[i].rpm, 
+                              event_queue[i].lane);
+            f_write(&csv_file, line, len, &bw);
+        }
+        f_close(&csv_file);
+        event_count = 0;
+        UART_Print("Flushed to CSV\r\n");
+    } else {
+        char msg[32]; 
+        sprintf(msg, "CSV open err: %d\r\n", fr); 
+        UART_Print(msg);
+    }
 }
 
 void Log_StageEvents(void) {
