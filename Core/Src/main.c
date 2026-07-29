@@ -3,9 +3,10 @@
   ******************************************************************************
   * @file    main.c
   * @brief   Rotarod + FatFs on W25Q Flash + USB MSC
-  *          - CSV visible in Windows Explorer
+  *          - Partition 0 (0:): event log (ROTAROD.CSV)
+  *          - Partition 1 (1:): export copy for Windows USB MSC
   *          - Auto unmount/mount on USB plug/unplug
-  *          - Auto-reformat if FS size != flash size
+  *          - Auto-reformat if FS size != half flash size
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -14,21 +15,21 @@
 #include "fatfs.h"
 #include "usb_device.h"
 
-#include "TM1637.h"
-#include "74hc165.h"
+#include "fs_logger.h"
+#include "cli.h"
+#include "motor_control.h"
+#include "ui.h"
 #include "w25q64.h"
 #include "ds3231.h"
 #include "usbd_core.h"
-#include "usb_device.h"
+#include "staging.h"
+#include "settings.h"
+
 extern USBD_HandleTypeDef hUsbDeviceFS;
 /* Control MSC readiness/capacity in USB storage layer */
 extern void STORAGE_SetMediaReady(uint8_t ready);
 extern void STORAGE_UpdateCapacity(uint32_t bytes);
-
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include "staging.h"
+extern void STORAGE_SetPartitionOffset(uint32_t byte_offset);
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
@@ -38,62 +39,9 @@ TIM_HandleTypeDef htim4, htim5;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-#define HC165_NUM_CHIPS     3
-#define HC165_TOTAL_PINS    (HC165_NUM_CHIPS * 8)
-#define NUM_DISPLAYS        7
-#define DISPLAY_UPDATE_MS   100
-#define DEBUG_UPDATE_MS     1000
-#define BUTTON_READ_MS      20
-#define PWM_MAX_DUTY        3788
-#define MAX_EVENTS          400
 #define USB_CHECK_MS        100
-#define FALL_DEBOUNCE_MS    500
-
-volatile uint32_t timer_overflow = 0, last_capture = 0, rpm = 0, last_capture_time = 0;
-uint32_t last_display_tick = 0, last_debug_tick = 0, adc_raw = 0, pwm_duty = 0, set_value = 0;
-uint32_t last_button_read_tick = 0, last_usb_check = 0;
-
-uint8_t status_tombol[HC165_NUM_CHIPS], pins[HC165_TOTAL_PINS];
-
-static GPIO_TypeDef* clk_ports[NUM_DISPLAYS] = {
-    DISP_CLK1_GPIO_Port, DISP_CLK2_GPIO_Port, DISP_CLK3_GPIO_Port,
-    DISP_CLK4_GPIO_Port, DISP_CLK5_GPIO_Port, DISP_CLK6_GPIO_Port, DISP_CLK7_GPIO_Port
-};
-static uint16_t clk_pins[NUM_DISPLAYS] = {
-    DISP_CLK1_Pin, DISP_CLK2_Pin, DISP_CLK3_Pin, DISP_CLK4_Pin,
-    DISP_CLK5_Pin, DISP_CLK6_Pin, DISP_CLK7_Pin
-};
-static GPIO_TypeDef* dio_ports[NUM_DISPLAYS] = {
-    DISP_DIO1_GPIO_Port, DISP_DIO2_GPIO_Port, DISP_DIO3_GPIO_Port,
-    DISP_DIO4_GPIO_Port, DISP_DIO5_GPIO_Port, DISP_DIO6_GPIO_Port, DISP_DIO7_GPIO_Port
-};
-static uint16_t dio_pins[NUM_DISPLAYS] = {
-    DISP_DIO1_Pin, DISP_DIO2_Pin, DISP_DIO3_Pin, DISP_DIO4_Pin,
-    DISP_DIO5_Pin, DISP_DIO6_Pin, DISP_DIO7_Pin
-};
-
-static void Display_ShowNumber(uint8_t idx, uint16_t num, uint8_t dots) {
-    if (idx >= NUM_DISPLAYS) return;
-    TM1637_DisplayNumber(clk_ports[idx], clk_pins[idx], dio_ports[idx], dio_pins[idx], num, dots);
-}
-static void Display_SetBrightness(uint8_t idx, uint8_t brightness) {
-    if (idx >= NUM_DISPLAYS) return;
-    TM1637_SetBrightness(clk_ports[idx], clk_pins[idx], dio_ports[idx], dio_pins[idx], brightness);
-}
-
-// FatFs
-/* Use FatFs objects provided by MX_FATFS (USERFatFS/USERPath) */
-extern FATFS USERFatFS;
-FIL csv_file;
-UINT bw;
-FRESULT fr;
-static uint8_t fs_mounted = 0, fs_formatted = 0;
-static uint32_t flash_capacity_bytes = 0;
-
-typedef struct { uint32_t timestamp; uint16_t duration_ms, rpm; uint8_t lane; } FallEvent_t;
-static FallEvent_t event_queue[MAX_EVENTS];
-static uint16_t event_count = 0;
-static uint8_t csv_header_written = 0;
+// Debounce for VBUS sense EXTI to avoid duplicate open events (ms)
+#define VBUS_DEBOUNCE_MS    200
 
 // USB
 uint8_t usb_connected = 0;
@@ -101,9 +49,7 @@ static uint8_t last_usb_state = 0;
 // VBUS EXTI event pending flag
 volatile uint8_t vbus_event_pending = 0;
 
-// Debounce
-static uint8_t prev_fall = 0;
-static uint32_t last_fall_time = 0;
+uint32_t last_usb_check = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -115,296 +61,32 @@ static void MX_SPI1_Init(void);
 static void MX_TIM5_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM4_Init(void);
-void UART_Print(char *msg);
 
 /* USER CODE BEGIN 0 */
-
-static void MountFS(void) {
-    if (fs_mounted) return;
-    fr = f_mount(&USERFatFS, USERPath, 1);
-    if (fr == FR_OK) {
-        fs_mounted = 1;
-        UART_Print("FatFS mounted OK\r\n");
-            // Ensure volume label is ROTAROD
-            FRESULT lab_fr = f_setlabel("ROTAROD");
-            if (lab_fr == FR_OK) UART_Print("Volume label set to ROTAROD\r\n");
-            else { char msg[48]; sprintf(msg, "Set label err: %d\r\n", lab_fr); UART_Print(msg); }
-    } else if (fr == FR_NO_FILESYSTEM) {
-        UART_Print("No FS - needs format\r\n");
-    } else {
-        char msg[32]; sprintf(msg, "Mount err: %d\r\n", fr); UART_Print(msg);
-    }
-}
-
-static void UnmountFS(void) {
-    if (!fs_mounted) return;
-    f_mount(NULL, USERPath, 0);
-    fs_mounted = 0;
-    UART_Print("FatFS unmounted\r\n");
-}
-
-static uint8_t VerifyBootSector(void) {
-    uint8_t boot[512];
-    W25Q64_ReadData(0, boot, 512);
-    // Check boot signature 0x55 0xAA at offset 510-511
-    if (boot[510] == 0x55 && boot[511] == 0xAA) {
-        UART_Print("Boot sector valid (0x55AA)\r\n");
-        return 1;
-    }
-    char dbg[48];
-    sprintf(dbg, "Boot sector invalid: %02X %02X\r\n", boot[510], boot[511]);
-    UART_Print(dbg);
-    return 0;
-}
-
-static void FormatFS(void) {
-    UART_Print("Formatting flash...\r\n");
-    UART_Print("Chip erase (wait ~10-20s)...\r\n");
-    W25Q64_ChipErase();
-    UART_Print("Chip erase done\r\n");
-
-    // Clear FatFs cache
-    f_mount(NULL, USERPath, 0);
-    fs_mounted = 0;
-
-    BYTE work[_MAX_SS];
-    FRESULT fmt_fr;
-
-    // Attempt 1: FM_ANY (auto FAT12/16/32) - best for 8-32MB
-    // First try: superfloppy (no MBR) so USB host sees FS at LBA0
-    UART_Print("Trying FM_ANY|FM_SFD (superfloppy)...\r\n");
-    fmt_fr = f_mkfs(USERPath, FM_ANY | FM_SFD, 0, work, sizeof(work));
-    if (fmt_fr != FR_OK) {
-        UART_Print("Trying FM_ANY...\r\n");
-        fmt_fr = f_mkfs(USERPath, FM_ANY, 0, work, sizeof(work));
-    }
-    {
-      char dbg[64]; sprintf(dbg, "f_mkfs FM_ANY ret=%d\r\n", fmt_fr); UART_Print(dbg);
-    }
-    if (fmt_fr == FR_OK && VerifyBootSector()) {
-        UART_Print("Format FM_ANY OK\r\n");
-        fs_formatted = 1;
-            // Dump boot sector BPB fields for debugging
-            {
-                uint8_t boot[512];
-                W25Q64_ReadData(0, boot, 512);
-                uint16_t bytes_per_sector = boot[11] | (boot[12] << 8);
-                uint8_t sectors_per_cluster = boot[13];
-                uint16_t reserved_sectors = boot[14] | (boot[15] << 8);
-                uint8_t num_fats = boot[16];
-                uint16_t root_ent = boot[17] | (boot[18] << 8);
-                uint16_t tot16 = boot[19] | (boot[20] << 8);
-                uint32_t tot32 = boot[32] | (boot[33] << 8) | (boot[34] << 16) | (boot[35] << 24);
-                uint32_t total_sectors_bpb = tot16 ? tot16 : tot32;
-                char dbg[128];
-                sprintf(dbg, "BPB: bps=%u spc=%u rsv=%u fats=%u root=%u tot=%lu\r\n",
-                        bytes_per_sector, sectors_per_cluster, reserved_sectors,
-                        num_fats, root_ent, (unsigned long)total_sectors_bpb);
-                UART_Print(dbg);
-
-                // Hexdump first 64 bytes
-                for (int ln = 0; ln < 64; ln += 16) {
-                    char line[96]; char *p = line; int off = 0;
-                    off += sprintf(p + off, "%02X: ", ln);
-                    for (int j = 0; j < 16; j++) off += sprintf(p + off, "%02X ", boot[ln + j]);
-                    off += sprintf(p + off, "\r\n");
-                    UART_Print(line);
-                }
-            }
-        // Try mounting a few times to allow driver/media settle
-        for (int i = 0; i < 5; i++) {
-            fr = f_mount(&USERFatFS, USERPath, 1);
-            if (fr == FR_OK) {
-                fs_mounted = 1; UART_Print("FatFS mounted OK\r\n");
-                    // set volume label
-                    FRESULT lab_fr = f_setlabel("ROTAROD");
-                    if (lab_fr == FR_OK) UART_Print("Volume label set to ROTAROD\r\n");
-                    else { char msg[48]; sprintf(msg, "Set label err: %d\r\n", lab_fr); UART_Print(msg); }
-                // Print FS details
-                DWORD fre_clust; FATFS *fs_tmp;
-                if (f_getfree(USERPath, &fre_clust, &fs_tmp) == FR_OK) {
-                    DWORD fs_sectors = (fs_tmp->n_fatent - 2) * fs_tmp->csize;
-                    char dbg[256]; sprintf(dbg, "Mounted FS: n_fatent=%lu csize=%lu total_sectors=%lu\r\n",
-                                            fs_tmp->n_fatent, fs_tmp->csize, fs_sectors);
-                    UART_Print(dbg);
-                    sprintf(dbg, "FS layout: volbase=%lu fatbase=%lu dirbase=%lu database=%lu fsize=%lu\r\n",
-                            fs_tmp->volbase, fs_tmp->fatbase, fs_tmp->dirbase, fs_tmp->database, fs_tmp->fsize);
-                    UART_Print(dbg);
-
-                    // Dump BPB at volume base (in case it's not LBA 0)
-                    uint8_t vol_boot[512];
-                    uint32_t vol_addr = fs_tmp->volbase * 512UL;
-                    W25Q64_ReadData(vol_addr, vol_boot, 512);
-                    sprintf(dbg, "BPB at volbase (%lu): bps=%u spc=%u rsv=%u fats=%u root=%u tot16=%u tot32=%lu\r\n",
-                            (unsigned long)fs_tmp->volbase,
-                            vol_boot[11] | (vol_boot[12] << 8), vol_boot[13], vol_boot[14] | (vol_boot[15]<<8),
-                            vol_boot[16], vol_boot[17] | (vol_boot[18]<<8),
-                            (unsigned long)(vol_boot[32] | (vol_boot[33]<<8) | (vol_boot[34]<<16) | (vol_boot[35]<<24)));
-                    UART_Print(dbg);
-                    for (int ln = 0; ln < 64; ln += 16) {
-                        char line[96]; int off = 0;
-                        off += sprintf(line + off, "%02X: ", ln);
-                        for (int j = 0; j < 16; j++) off += sprintf(line + off, "%02X ", vol_boot[ln + j]);
-                        off += sprintf(line + off, "\r\n");
-                        UART_Print(line);
-                    }
-                }
-                break;
-            }
-            HAL_Delay(50);
-        }
-        if (!fs_mounted) {
-            char msg[48]; sprintf(msg, "Mount after format failed: %d\r\n", fr); UART_Print(msg);
-        }
-        return;
+/* Simple register-based IWDG initializer (no HAL dependency) */
+static void Simple_IWDG_Init(void) {
+    /* Enable LSI oscillator for IWDG clock */
+    __HAL_RCC_LSI_ENABLE();
+    uint32_t tickstart = HAL_GetTick();
+    while (__HAL_RCC_GET_FLAG(RCC_FLAG_LSIRDY) == RESET) {
+        if ((HAL_GetTick() - tickstart) > 500) break;
     }
 
-    // Attempt 2: FM_FAT32 (force FAT32) as superfloppy
-    UART_Print("Trying FM_FAT32|FM_SFD...\r\n");
-    fmt_fr = f_mkfs(USERPath, FM_FAT32 | FM_SFD, 0, work, sizeof(work));
-    if (fmt_fr != FR_OK) {
-        UART_Print("Trying FM_FAT32...\r\n");
-        fmt_fr = f_mkfs(USERPath, FM_FAT32, 0, work, sizeof(work));
+    /* Enable write access to IWDG_PR and IWDG_RLR */
+    IWDG->KR = 0x5555;
+    /* Prescaler: 32 (PR = 3) */
+    IWDG->PR = 3;
+    /* Reload value: ~3000 (approx 3s with LSI ~32kHz) */
+    IWDG->RLR = 3000;
+    /* Wait for registers update with timeout */
+    tickstart = HAL_GetTick();
+    while (IWDG->SR != 0) {
+        if ((HAL_GetTick() - tickstart) > 500) break;
     }
-    if (fmt_fr == FR_OK && VerifyBootSector()) {
-        UART_Print("Format FAT32 OK\r\n");
-        fs_formatted = 1;
-        MountFS();
-        return;
-    }
-
-    // Attempt 3: FM_FAT (FAT12/16) with au=8 (4KB clusters), prefer superfloppy
-    UART_Print("Trying FM_FAT|FM_SFD au=8...\r\n");
-    fmt_fr = f_mkfs(USERPath, FM_FAT | FM_SFD, 8, work, sizeof(work));
-    if (fmt_fr != FR_OK) {
-        UART_Print("Trying FM_FAT au=8...\r\n");
-        fmt_fr = f_mkfs(USERPath, FM_FAT, 8, work, sizeof(work));
-    }
-    if (fmt_fr == FR_OK && VerifyBootSector()) {
-        UART_Print("Format FAT16 OK\r\n");
-        fs_formatted = 1;
-        MountFS();
-        return;
-    }
-
-    char msg[48];
-    sprintf(msg, "All format attempts failed, last: %d\r\n", fmt_fr);
-    UART_Print(msg);
-}
-
-static void CheckAndFormatIfMismatch(void) {
-    if (!fs_mounted || flash_capacity_bytes == 0) return;
-
-    DWORD fre_clust;
-    FATFS *fs_ptr;
-        if (f_getfree(USERPath, &fre_clust, &fs_ptr) != FR_OK) return;
-
-        DWORD fs_total_sectors = (fs_ptr->n_fatent - 2) * fs_ptr->csize;
-        DWORD expected_sectors = flash_capacity_bytes / 512;
-
-        char dbg[120];
-        sprintf(dbg, "FS sectors: %lu / expected: %lu (n_fatent=%lu csize=%lu)\r\n",
-            fs_total_sectors, expected_sectors, fs_ptr->n_fatent, fs_ptr->csize);
-        UART_Print(dbg);
-
-    // Allow tolerance up to one large erase block (64KB = 128 sectors) to account
-    // for alignment differences from mkfs.
-    const DWORD allowed_diff_sectors = 128;
-    if (fs_total_sectors < (expected_sectors - allowed_diff_sectors)) {
-        UART_Print("FS size mismatch! Reformatting...\r\n");
-        UnmountFS();
-        FormatFS();
-    } else {
-        UART_Print("FS size OK\r\n");
-    }
-}
-
-static void WriteCSVHeader(void) {
-    if (!fs_mounted) return;
-    if (!fs_mounted) {
-        // if FS not mounted, create header in staging area
-        const char header[] = "timestamp,duration_ms,rpm,lane\r\n";
-        staging_append((const uint8_t*)header, (uint32_t)strlen(header));
-        csv_header_written = 1;
-        UART_Print("CSV header staged\r\n");
-        return;
-    }
-    fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
-    if (fr == FR_OK) {
-        char header[] = "timestamp,duration_ms,rpm,lane\r\n";
-        f_write(&csv_file, header, strlen(header), &bw);
-        f_close(&csv_file);
-        csv_header_written = 1;
-        UART_Print("CSV header written\r\n");
-    } else {
-        char msg[32]; sprintf(msg, "CSV create err: %d\r\n", fr); UART_Print(msg);
-    }
-}
-
-static void AppendCSVLine(FallEvent_t *ev) {
-    char line[64];
-    int len = sprintf(line, "%lu,%u,%u,%u\r\n", ev->timestamp, ev->duration_ms, ev->rpm, ev->lane);
-    if (!fs_mounted) {
-        staging_append((const uint8_t*)line, (uint32_t)len);
-        return;
-    }
-    fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
-    if (fr == FR_OK) {
-        f_write(&csv_file, line, len, &bw);
-        f_close(&csv_file);
-    }
-}
-
-static void Log_Init(void) { event_count = 0; csv_header_written = 0; }
-
-static void Log_AddEvent(uint16_t duration_ms, uint16_t rpm_val, uint8_t lane) {
-    if (event_count >= MAX_EVENTS) { UART_Print("Queue full!\r\n"); return; }
-    FallEvent_t *ev = &event_queue[event_count++];
-    ev->timestamp = HAL_GetTick() / 1000;
-    ev->duration_ms = duration_ms;
-    ev->rpm = rpm_val;
-    ev->lane = lane;
-    char msg[64];
-    sprintf(msg, "Event: dur=%u, rpm=%u, lane=%u\r\n", duration_ms, rpm_val, lane);
-    UART_Print(msg);
-}
-
-static void Log_FlushToCSV(void) {
-    if (event_count == 0) { UART_Print("No events.\r\n"); return; }
-    if (!csv_header_written) WriteCSVHeader();
-    for (int i = 0; i < event_count; i++) AppendCSVLine(&event_queue[i]);
-    event_count = 0;
-    UART_Print("Flushed to CSV\r\n");
-}
-
-static void Log_StageEvents(void) {
-    if (event_count == 0) { UART_Print("No events to stage.\r\n"); return; }
-    for (int i = 0; i < event_count; i++) {
-        char line[64];
-        int len = sprintf(line, "%lu,%u,%u,%u\r\n", event_queue[i].timestamp, event_queue[i].duration_ms, event_queue[i].rpm, event_queue[i].lane);
-        if (staging_append((const uint8_t*)line, (uint32_t)len) != 0) {
-            UART_Print("Staging append failed\r\n");
-            return;
-        }
-    }
-    event_count = 0;
-    UART_Print("Staged events to flash\r\n");
-}
-
-static void Log_ReadCSV(void) {
-    if (!fs_mounted) { UART_Print("FS not mounted\r\n"); return; }
-        fr = f_open(&csv_file, "ROTAROD.CSV", FA_READ);
-    if (fr == FR_OK) {
-        char buf[256]; UINT br;
-        UART_Print("\r\n=== CSV ===\r\n");
-        while (f_read(&csv_file, buf, sizeof(buf)-1, &br) == FR_OK && br > 0) {
-            buf[br] = '\0'; UART_Print(buf);
-        }
-        UART_Print("\r\n=== End ===\r\n");
-        f_close(&csv_file);
-    } else {
-        UART_Print("Cannot open CSV\r\n");
-    }
+    /* Reload counter */
+    IWDG->KR = 0xAAAA;
+    /* Start the watchdog */
+    IWDG->KR = 0xCCCC;
 }
 /* USER CODE END 0 */
 
@@ -418,7 +100,13 @@ int main(void)
     MX_SPI1_Init();
     MX_TIM5_Init();
     MX_USART1_UART_Init();
+    __HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE);
     MX_TIM4_Init();
+
+    // Set USB OTG priority 3 (di bawah TIM4=0 dan USART1=2, di atas DMA=6)
+    HAL_NVIC_SetPriority(OTG_FS_IRQn, 3, 0);
+
+
     /* Initialize FatFs (disk detection) before USB so MSC reports correct capacity */
     MX_FATFS_Init();
     MX_USB_DEVICE_Init();
@@ -439,9 +127,7 @@ int main(void)
     HAL_GPIO_WritePin(GPIOB, DISP_CLK2_Pin | DISP_CLK3_Pin | DISP_CLK4_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(GPIOC, DISP_CLK1_Pin | DISP_CLK5_Pin | DISP_CLK6_Pin, GPIO_PIN_SET);
 
-    // Display init
-    for (uint8_t i = 0; i < NUM_DISPLAYS; i++) Display_SetBrightness(i, 4);
-    for (uint8_t i = 0; i < NUM_DISPLAYS; i++) Display_ShowNumber(i, (i+1)*1111, 0);
+    // Displays are initialized via UI_Init() later
 
     // TIM4 IC on PB8
     GPIO_InitStruct.Pin = BLDC_PULSE_Pin;
@@ -465,19 +151,19 @@ int main(void)
 
     uint32_t flash_id = W25Q64_ReadID();
     uint8_t cap_byte = flash_id & 0xFF;
-    flash_capacity_bytes = (cap_byte == 0x17) ? 8*1024*1024 :
+    uint32_t flash_cap = (cap_byte == 0x17) ? 8*1024*1024 :
                            (cap_byte == 0x18) ? 16*1024*1024 :
                            (cap_byte == 0x19) ? 32*1024*1024 : 8*1024*1024;
+    FS_SetFlashCapacity(flash_cap);
     char id_buf[80];
-    sprintf(id_buf, "Flash ID: 0x%06lX (%lu MB)\r\n", flash_id, flash_capacity_bytes/(1024*1024));
+    sprintf(id_buf, "Flash ID: 0x%06lX (%lu MB)\r\n", flash_id, flash_cap/(1024*1024));
     UART_Print(id_buf);
 
-    // Mount or format FatFs
+    // Mount FatFs (formatting can be triggered on-demand via FTDI command "FORMAT")
     MountFS();
-    if (!fs_mounted && !fs_formatted) {
+    if (!FS_IsMounted() && !FS_IsFormatted()) {
+        UART_Print("Flash is completely empty. Performing one-time format...\r\n");
         FormatFS();
-    } else if (fs_mounted) {
-        CheckAndFormatIfMismatch();
     }
 
     // RTC
@@ -486,86 +172,83 @@ int main(void)
     // Initialize staging area for queued writes while USB attached
     if (staging_init() == 0) UART_Print("Staging initialized\r\n");
 
-    // Independent watchdog disabled for now (HAL IWDG header not present)
+    // Independent watchdog: simple register-based init (avoids HAL IWDG dependency)
+    Simple_IWDG_Init();
 
-    // Logging
+    // Initialize UI (Displays)
+    UI_Init();
+    // Logging init
     Log_Init();
 
-    last_display_tick = HAL_GetTick();
-    last_debug_tick = HAL_GetTick();
-    last_capture_time = HAL_GetTick();
-    last_button_read_tick = HAL_GetTick();
+    uint32_t last_debug_tick = HAL_GetTick();
     last_usb_check = HAL_GetTick();
-    prev_fall = 0;
-    last_fall_time = 0;
 
     UART_Print("System Start\r\n");
 
+    // Auto-load PID settings dari Flash saat startup
+    {
+        MotorSettings saved;
+        if (Settings_Load(&saved)) {
+            Motor_SetPID(saved.kp, saved.ki, saved.kd);
+            UART_Print("[BOOT] PID settings loaded from Flash\r\n");
+        } else {
+            UART_Print("[BOOT] No saved PID settings, using defaults\r\n");
+        }
+    }
+
     while (1)
     {
-        // Shift register
-        if (HAL_GetTick() - last_button_read_tick >= BUTTON_READ_MS) {
-            HC165_Read(status_tombol, HC165_NUM_CHIPS);
-            HC165_Unpack(status_tombol, pins, HC165_NUM_CHIPS);
-            last_button_read_tick = HAL_GetTick();
-        }
-
-        // Fall simulation (rising edge + debounce)
-        if (pins[0] && !prev_fall && (HAL_GetTick() - last_fall_time > FALL_DEBOUNCE_MS)) {
-            Log_AddEvent(1000 + (rand() % 2001), rpm, 3);
-            last_fall_time = HAL_GetTick();
-        }
-        prev_fall = pins[0];
-
-        // Flush: D1 IC A
-        if (pins[1]) {
-            static uint32_t last_flush = 0;
-            if (HAL_GetTick() - last_flush > 300) { Log_FlushToCSV(); last_flush = HAL_GetTick(); }
-        }
-
-        // Read CSV: D2 IC A
-        if (pins[2]) {
-            static uint32_t last_read = 0;
-            if (HAL_GetTick() - last_read > 300) { Log_ReadCSV(); last_read = HAL_GetTick(); }
-        }
+        // Process commands over FTDI UART (e.g., "FORMAT", "CHECKFS", "HELP")
+        ProcessUartRxCommand();
+        // Shift register and displays
+        UI_Process();
+        // ADC & PWM
+        Motor_Process();
 
         // USB VBUS detection (handled by EXTI or periodic poll)
         if (vbus_event_pending || (HAL_GetTick() - last_usb_check >= USB_CHECK_MS)) {
             uint8_t new_usb = HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin);
+            if (HAL_GetTick() < 2000) new_usb = 0; // Ignore VBUS during early boot (debounce brownout)
             if (new_usb && !last_usb_state) {
-                UART_Print("USB connected - staging events, committing before host probe\r\n");
-                // Tell MSC layer to report not-ready while we prepare the media
+                UART_Print("USB connected - exporting to partition 1\r\n");
                 STORAGE_SetMediaReady(0);
 
-                // Ensure FS is mounted so we can replay staged entries into the CSV
-                if (!fs_mounted) MountFS();
+                if (!FS_IsMounted()) MountFS();
 
-                // Move queued events into staging area
-                if (event_count > 0) Log_StageEvents();
+                if (Log_GetEventCount() > 0) Log_FlushToCSV();
 
-                // If there are staged entries, replay them into the mounted FS now
-                if (staging_has_entries()) {
-                    UART_Print("Committing staged entries to FS before host probe...\r\n");
-                    if (staging_commit() == 0) UART_Print("Staging committed\r\n");
-                    else UART_Print("Staging commit failed\r\n");
-                }
-
-                // Ensure all caches flushed then unmount so host can mount the updated FS
-                HAL_Delay(50);
-                UnmountFS();
-
-                // Update MSC capacity and mark media ready for the host
-                STORAGE_UpdateCapacity(flash_capacity_bytes);
-                STORAGE_SetMediaReady(1);
-            } else if (!new_usb && last_usb_state) {
-                UART_Print("USB disconnected - remounting FS\r\n");
-                HAL_Delay(100);
-                MountFS();
                 if (staging_has_entries()) {
                     UART_Print("Committing staged entries to FS...\r\n");
                     if (staging_commit() == 0) UART_Print("Staging committed\r\n");
                     else UART_Print("Staging commit failed\r\n");
                 }
+
+                ExportCsvToPartition1();
+
+                HAL_Delay(50);
+                UnmountAllFS();
+
+                uint32_t lba_start = 0, sector_count = 0;
+                if (ReadExportPartition(&lba_start, &sector_count)) {
+                    STORAGE_SetPartitionOffset(lba_start * 512U);
+                    STORAGE_UpdateCapacity(sector_count * 512U);
+                    char dbg[80];
+                    sprintf(dbg, "USB MSC: LBA %lu, %lu sectors\r\n",
+                            (unsigned long)lba_start, (unsigned long)sector_count);
+                    UART_Print(dbg);
+                } else {
+                    STORAGE_SetPartitionOffset(FS_GetFlashCapacity() / 2);
+                    STORAGE_UpdateCapacity(FS_GetFlashCapacity() / 2);
+                    UART_Print("USB MSC: fallback half-flash export\r\n");
+                }
+                STORAGE_SetMediaReady(1);
+            } else if (!new_usb && last_usb_state) {
+                UART_Print("USB disconnected - remounting FS\r\n");
+                STORAGE_SetPartitionOffset(0);
+                STORAGE_UpdateCapacity(FS_GetFlashCapacity());
+                STORAGE_SetMediaReady(0);
+                HAL_Delay(100);
+                MountFS();
             }
             last_usb_state = new_usb;
             usb_connected = new_usb;
@@ -573,23 +256,59 @@ int main(void)
             vbus_event_pending = 0;
         }
 
-        // Display update (100ms)
-        if (HAL_GetTick() - last_display_tick >= DISPLAY_UPDATE_MS) {
-            if (HAL_GetTick() - last_capture_time > 500) rpm = 0;
-            Display_ShowNumber(2, (uint16_t)rpm, 0);
-            last_display_tick = HAL_GetTick();
-        }
-
-        // Debug UART (1 sec)
-        if (HAL_GetTick() - last_debug_tick >= DEBUG_UPDATE_MS) {
+        // Debug UART (100 ms)
+        if (HAL_GetTick() - last_debug_tick >= 100) {
             uint8_t sec, min, hour, day, date, month, year;
             DS3231_ReadTime(&sec, &min, &hour, &day, &date, &month, &year);
 
-            char uart_buf[250];
-            sprintf(uart_buf, "[%02d:%02d:%02d %02d/%02d/%02d] RPM:%lu ADC:%lu PWM:%lu SET:%lu Q:%d USB:%d FS:%d\r\n",
-                    hour, min, sec, date, month, year,
-                    (unsigned long)rpm, adc_raw, pwm_duty, set_value,
-                    event_count, usb_connected, fs_mounted);
+            /* 
+            float kp, ki, kd;
+            Motor_GetPID(&kp, &ki, &kd);
+            
+            float err, integ;
+            Motor_GetPIDState(&err, &integ);
+            
+            int kp_i = (int)kp, kp_f = (int)((kp - kp_i) * 100);
+            int ki_i = (int)ki, ki_f = (int)((ki - ki_i) * 100);
+            int kd_i = (int)kd, kd_f = (int)((kd - kd_i) * 100);
+            if (kp_f < 0) kp_f = -kp_f;
+            if (ki_f < 0) ki_f = -ki_f;
+            if (kd_f < 0) kd_f = -kd_f;
+            
+            int err_i = (int)err, err_f = (int)((err - err_i) * 10);
+            int int_i = (int)integ, int_f = (int)((integ - int_i) * 10);
+            if (err_f < 0) err_f = -err_f;
+            if (int_f < 0) int_f = -int_f;
+
+            float precise_orpm = Motor_GetPreciseOutputRPM();
+            int orpm_i = (int)precise_orpm;
+            int orpm_f = (int)((precise_orpm - orpm_i) * 10);
+            if (orpm_f < 0) orpm_f = -orpm_f;
+
+            float precise_mrpm = Motor_GetPreciseMotorRPM();
+            int mrpm_i = (int)precise_mrpm;
+            int mrpm_f = (int)((precise_mrpm - mrpm_i) * 10);
+            if (mrpm_f < 0) mrpm_f = -mrpm_f;
+
+            char uart_buf[320];
+            sprintf(uart_buf, "[%02d:%02d:%02d.%03lu] SET:%lu RPM:%d.%d TRPM:%lu MRPM:%d.%d PWM:%lu ERR:%d.%d INT:%d.%d Kp:%d.%02d Ki:%d.%02d Kd:%d.%02d\r\n",
+                    hour, min, sec, (unsigned long)(HAL_GetTick() % 1000),
+                    Motor_GetSetValue(), orpm_i, orpm_f,           // RPM float 1 desimal
+                    (unsigned long)(Motor_GetSetValue() * 25),     // TRPM = Target Motor RPM
+                    mrpm_i, mrpm_f,                                // MRPM = Actual Motor RPM (float presisi)
+                    Motor_GetPWMDuty(),
+                    err_i, err_f, int_i, int_f,
+                    kp_i, kp_f, ki_i, ki_f, kd_i, kd_f);
+            UART_Print(uart_buf);
+            */
+
+            // DEBUG USB / FILESYSTEM
+            char uart_buf[128];
+            sprintf(uart_buf, "[%02d:%02d:%02d] USB FS: VBUS=%d, Mtd=%d, Fmt=%d, Events=%u, Cap=%lu MB\r\n",
+                    hour, min, sec, 
+                    usb_connected, FS_IsMounted(), FS_IsFormatted(), 
+                    Log_GetEventCount(), 
+                    (unsigned long)(FS_GetFlashCapacity() / 1024 / 1024));
             UART_Print(uart_buf);
             last_debug_tick = HAL_GetTick();
         }
@@ -597,31 +316,12 @@ int main(void)
         // Heartbeat every 500ms
         static uint32_t last_heartbeat = 0;
         if (HAL_GetTick() - last_heartbeat >= 500) {
-            // minimal heartbeat
-            UART_Print(".");
+            // minimal heartbeat removed
             last_heartbeat = HAL_GetTick();
         }
 
-        // Watchdog refresh removed (IWDG disabled in this build)
-
-        // ADC & PWM
-        static uint32_t last_adc_tick = 0;
-        if (HAL_GetTick() - last_adc_tick >= 50) {
-            HAL_ADC_Start(&hadc1);
-            if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK) {
-                adc_raw = HAL_ADC_GetValue(&hadc1);
-                set_value = (adc_raw * 150) / 4095;
-                if (set_value > 150) set_value = 150;
-            }
-            if (adc_raw < 20) pwm_duty = 0;
-            else {
-                pwm_duty = (adc_raw * 4200) / 4096;
-                if (pwm_duty > 4199) pwm_duty = 4199;
-            }
-            if (pwm_duty > PWM_MAX_DUTY) pwm_duty = PWM_MAX_DUTY;
-            __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, pwm_duty);
-            last_adc_tick = HAL_GetTick();
-        }
+        // Refresh independent watchdog (register-based)
+        IWDG->KR = 0xAAAA;
     }
 }
 
@@ -707,7 +407,7 @@ static void MX_TIM4_Init(void)
     TIM_MasterConfigTypeDef sMasterConfig = {0};
     TIM_IC_InitTypeDef sConfigIC = {0};
     htim4.Instance = TIM4;
-    htim4.Init.Prescaler = 8399;
+    htim4.Init.Prescaler = 83; // 84MHz / 84 = 1 MHz → 1 tick = 1 µs (resolusi 100× lebih baik)
     htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
     htim4.Init.Period = 65535;
     htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -801,72 +501,25 @@ static void MX_GPIO_Init(void)
     HAL_GPIO_WritePin(DISP_CLK7_GPIO_Port, DISP_CLK7_Pin, GPIO_PIN_SET);
 }
 
-// Non-blocking UART logger using interrupt-driven transmit and circular buffer
-#define UART_BUF_SIZE 4096
-static uint8_t uart_buf[UART_BUF_SIZE];
-static volatile uint32_t uart_head = 0; // write index
-static volatile uint32_t uart_tail = 0; // read index
-static volatile uint8_t uart_tx_busy = 0;
-
-static void uart_start_tx_if_needed(void);
-
-void UART_Print(char *msg) {
-    uint32_t len = strlen(msg);
-    // If message too large, truncate
-    if (len == 0) return;
-    // Drop message if not enough space to keep non-blocking
-    uint32_t free_space = (uart_tail + UART_BUF_SIZE - uart_head - 1) % UART_BUF_SIZE;
-    if (len > free_space) return; // drop
-    for (uint32_t i = 0; i < len; i++) {
-        uart_buf[uart_head] = (uint8_t)msg[i];
-        uart_head = (uart_head + 1) % UART_BUF_SIZE;
-    }
-    // Start TX if idle
-    uart_start_tx_if_needed();
-}
-
-static void uart_start_tx_if_needed(void) {
-    if (uart_tx_busy) return;
-    if (uart_tail == uart_head) return; // empty
-    uint32_t chunk_len = (uart_head > uart_tail) ? (uart_head - uart_tail) : (UART_BUF_SIZE - uart_tail);
-    uart_tx_busy = 1;
-    HAL_UART_Transmit_IT(&huart1, &uart_buf[uart_tail], (uint16_t)chunk_len);
-}
-
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart->Instance != USART1) return;
-    // advance tail by last transmitted amount
-    // HAL stores transferred size in huart->TxXferSize; use that
-    uint32_t sent = huart->TxXferSize;
-    uart_tail = (uart_tail + sent) % UART_BUF_SIZE;
-    uart_tx_busy = 0;
-    // start next chunk if available
-    uart_start_tx_if_needed();
-}
-
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance == TIM4 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3) {
-        uint32_t current = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_3);
-        uint32_t delta = (current > last_capture) ? (current - last_capture)
-                        : ((0xFFFF - last_capture) + current + 1);
-        delta += timer_overflow * 65536UL;
-        timer_overflow = 0;
-        rpm = (delta > 0) ? (100000 / delta) : 0;
-        last_capture = current;
-        last_capture_time = HAL_GetTick();
-    }
+    Motor_TIM_IC_CaptureCallback(htim);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance == TIM4) timer_overflow++;
+    Motor_TIM_PeriodElapsedCallback(htim);
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     if (GPIO_Pin == USB_VBUS_SENSE_Pin) {
-        vbus_event_pending = 1;
+        uint32_t now = HAL_GetTick();
+        static uint32_t last_vbus_irq = 0;
+        if ((now - last_vbus_irq) >= VBUS_DEBOUNCE_MS) {
+            vbus_event_pending = 1;
+            last_vbus_irq = now;
+        }
     }
 }
 

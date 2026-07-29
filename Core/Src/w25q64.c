@@ -1,4 +1,5 @@
 #include "w25q64.h"
+#include "main.h"
 #include <string.h>
 
 /* ==================== PIN CS ==================== */
@@ -11,6 +12,7 @@ extern SPI_HandleTypeDef hspi1;
 static inline void W25Q_CS_Low(void) {
     HAL_GPIO_WritePin(W25Q_CS_PORT, W25Q_CS_PIN, GPIO_PIN_RESET);
 }
+
 static inline void W25Q_CS_High(void) {
     HAL_GPIO_WritePin(W25Q_CS_PORT, W25Q_CS_PIN, GPIO_PIN_SET);
 }
@@ -70,8 +72,17 @@ void W25Q64_WriteDisable(void) {
 }
 
 void W25Q64_WaitBusy(void) {
+    uint32_t start_tick = HAL_GetTick();
+
+    // Polling Bit BUSY (Bit 0) pada Status Register 1
     while (W25Q64_ReadStatusRegister1() & 0x01) {
-        // busy
+        // Refresh Independent Watchdog untuk mencegah reset saat operasi flash lama
+        IWDG->KR = 0xAAAA;
+
+        // Safety timeout (misal 30 detik max untuk Chip Erase)
+        if ((HAL_GetTick() - start_tick) > 30000) {
+            break;
+        }
     }
 }
 
@@ -95,28 +106,39 @@ void W25Q64_ChipErase(void) {
 }
 
 void W25Q64_ReadData(uint32_t addr, uint8_t *buffer, uint32_t length) {
+    if (length == 0 || buffer == NULL) return;
+
+    uint8_t cmd[4];
+    cmd[0] = W25Q_CMD_READ;
+    cmd[1] = (uint8_t)((addr >> 16) & 0xFF);
+    cmd[2] = (uint8_t)((addr >> 8) & 0xFF);
+    cmd[3] = (uint8_t)(addr & 0xFF);
+
     W25Q_CS_Low();
-    W25Q_SPI_Transceive(W25Q_CMD_READ);
-    W25Q_SPI_Transceive((addr >> 16) & 0xFF);
-    W25Q_SPI_Transceive((addr >> 8) & 0xFF);
-    W25Q_SPI_Transceive(addr & 0xFF);
-    for (uint32_t i = 0; i < length; i++) {
-        buffer[i] = W25Q_SPI_Transceive(0xFF);
-    }
+    // Kirim Perintah + Alamat
+    HAL_SPI_Transmit(&hspi1, cmd, 4, HAL_MAX_DELAY);
+    // Terima data secara bulk (lebih cepat dari loop byte per byte)
+    HAL_SPI_Receive(&hspi1, buffer, length, HAL_MAX_DELAY);
     W25Q_CS_High();
 }
 
 void W25Q64_PageProgram(uint32_t addr, uint8_t *data, uint32_t length) {
+    if (length == 0 || data == NULL) return;
     if (length > 256) length = 256;
+
+    uint8_t cmd[4];
+    cmd[0] = W25Q_CMD_PP;
+    cmd[1] = (uint8_t)((addr >> 16) & 0xFF);
+    cmd[2] = (uint8_t)((addr >> 8) & 0xFF);
+    cmd[3] = (uint8_t)(addr & 0xFF);
+
     W25Q64_WriteEnable();
     W25Q_CS_Low();
-    W25Q_SPI_Transceive(W25Q_CMD_PP);
-    W25Q_SPI_Transceive((addr >> 16) & 0xFF);
-    W25Q_SPI_Transceive((addr >> 8) & 0xFF);
-    W25Q_SPI_Transceive(addr & 0xFF);
-    for (uint32_t i = 0; i < length; i++) {
-        W25Q_SPI_Transceive(data[i]);
-    }
+    // Kirim Perintah + Alamat
+    HAL_SPI_Transmit(&hspi1, cmd, 4, HAL_MAX_DELAY);
+    // Kirim Payload Data
+    HAL_SPI_Transmit(&hspi1, data, length, HAL_MAX_DELAY);
     W25Q_CS_High();
+
     W25Q64_WaitBusy();
 }

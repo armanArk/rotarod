@@ -1,0 +1,3 @@
+../Core/Src/settings.c:15:17:calc_checksum	2
+../Core/Src/settings.c:24:6:Settings_Load	10
+../Core/Src/settings.c:45:6:Settings_Save	4

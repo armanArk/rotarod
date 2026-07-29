@@ -1,6 +1,4 @@
-../Core/Src/staging.c:21:17:simple_crc	24	static
-../Core/Src/staging.c:27:5:staging_init	4120	static
-../Core/Src/staging.c:49:12:staging_write_sector	24	static
-../Core/Src/staging.c:58:5:staging_append	8216	static
-../Core/Src/staging.c:105:5:staging_has_entries	4	static
-../Core/Src/staging.c:109:5:staging_commit	8928	static
+../Core/Src/staging.c:16:5:staging_init	4	static
+../Core/Src/staging.c:21:5:staging_append	16	static
+../Core/Src/staging.c:31:5:staging_has_entries	4	static
+../Core/Src/staging.c:35:5:staging_commit	712	static

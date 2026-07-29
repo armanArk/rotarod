@@ -55,6 +55,7 @@
 ../Middlewares/Third_Party/FatFs/src/ff.c:4919:9:f_getlabel	88	static
 ../Middlewares/Third_Party/FatFs/src/ff.c:5013:9:f_setlabel	112	static
 ../Middlewares/Third_Party/FatFs/src/ff.c:5301:9:f_mkfs	128	static
+../Middlewares/Third_Party/FatFs/src/ff.c:5758:9:f_fdisk	80	static
 ../Middlewares/Third_Party/FatFs/src/ff.c:5830:8:f_gets	40	static
 ../Middlewares/Third_Party/FatFs/src/ff.c:5917:6:putc_bfd	24	static
 ../Middlewares/Third_Party/FatFs/src/ff.c:5973:5:putc_flush	24	static

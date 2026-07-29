@@ -1,6 +1,4 @@
-../Core/Src/staging.c:21:17:simple_crc	2
-../Core/Src/staging.c:27:5:staging_init	7
-../Core/Src/staging.c:49:12:staging_write_sector	2
-../Core/Src/staging.c:58:5:staging_append	3
-../Core/Src/staging.c:105:5:staging_has_entries	1
-../Core/Src/staging.c:109:5:staging_commit	11
+../Core/Src/staging.c:16:5:staging_init	1
+../Core/Src/staging.c:21:5:staging_append	5
+../Core/Src/staging.c:31:5:staging_has_entries	1
+../Core/Src/staging.c:35:5:staging_commit	7

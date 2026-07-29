@@ -1,0 +1,4 @@
+../Core/Src/ui.c:34:13:Display_ShowNumber	32	static
+../Core/Src/ui.c:39:13:Display_SetBrightness	32	static
+../Core/Src/ui.c:44:6:UI_Init	16	static
+../Core/Src/ui.c:49:6:UI_Process	24	static

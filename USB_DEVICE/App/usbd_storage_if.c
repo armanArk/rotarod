@@ -95,6 +95,7 @@ const int8_t STORAGE_Inquirydata_FS[] = {
 // Auto-detected flash capacity
 static uint32_t s_flash_capacity_bytes = 0;
 static uint32_t s_block_count = 0;
+static uint32_t s_partition_offset_bytes = 0;
 // Media ready flag set at init to avoid slow checks in IsReady
 static volatile uint8_t s_media_ready = 0;
 
@@ -254,8 +255,12 @@ int8_t STORAGE_Read_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t bl
     return USBD_FAIL;
   }
 
-  uint32_t addr = blk_addr * STORAGE_BLK_SIZ;
+  uint32_t addr = s_partition_offset_bytes + (blk_addr * STORAGE_BLK_SIZ);
   uint32_t len  = blk_len * STORAGE_BLK_SIZ;
+
+  if ((addr + len) > (s_partition_offset_bytes + s_flash_capacity_bytes)) {
+    return USBD_FAIL;
+  }
 
   W25Q64_ReadData(addr, buf, len);
   return (USBD_OK);
@@ -275,20 +280,18 @@ int8_t STORAGE_Write_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t b
   /* USER CODE BEGIN 7 */
   UNUSED(lun);
 
-  // Avoid performing flash erase/program from USB context while app may be using SPI
-  // If VBUS is present, host may be probing/writing — avoid long flash ops here
-  if (HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin) == GPIO_PIN_SET) {
-    return USBD_FAIL;
-  }
-
   // Bounds check
   if ((blk_addr + blk_len) > s_block_count) {
     return USBD_FAIL;
   }
 
-  uint32_t addr = blk_addr * STORAGE_BLK_SIZ;
+  uint32_t addr = s_partition_offset_bytes + (blk_addr * STORAGE_BLK_SIZ);
   uint32_t len  = blk_len * STORAGE_BLK_SIZ;
   uint32_t end_addr = addr + len;
+
+  if (end_addr > (s_partition_offset_bytes + s_flash_capacity_bytes)) {
+    return USBD_FAIL;
+  }
 
   // Process each 4KB W25Q sector that overlaps the write range
   for (uint32_t se = (addr / 4096) * 4096; se < end_addr; se += 4096) {
@@ -341,6 +344,11 @@ void STORAGE_UpdateCapacity(uint32_t bytes)
 {
   s_flash_capacity_bytes = bytes;
   s_block_count = s_flash_capacity_bytes / STORAGE_BLK_SIZ;
+}
+
+void STORAGE_SetPartitionOffset(uint32_t byte_offset)
+{
+  s_partition_offset_bytes = byte_offset;
 }
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
