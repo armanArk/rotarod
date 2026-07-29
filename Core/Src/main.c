@@ -31,6 +31,7 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 extern void STORAGE_SetMediaReady(uint8_t ready);
 extern void STORAGE_UpdateCapacity(uint32_t bytes);
 extern void STORAGE_SetPartitionOffset(uint32_t byte_offset);
+extern void STORAGE_Flush(void);
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
@@ -276,6 +277,7 @@ int main(void)
 
             case USB_SM_DISCONN_START:
                 UART_Print("USB disconnected - remounting FS\r\n");
+                STORAGE_Flush();
                 STORAGE_SetPartitionOffset(0);
                 STORAGE_UpdateCapacity(FS_GetFlashCapacity());
                 STORAGE_SetMediaReady(0);
@@ -353,6 +355,10 @@ int main(void)
         static uint32_t last_heartbeat = 0;
         if (HAL_GetTick() - last_heartbeat >= 500) {
             // minimal heartbeat removed
+            STORAGE_Flush();
+            if (Log_GetEventCount() > 0) {
+                Log_FlushToCSV();
+            }
             last_heartbeat = HAL_GetTick();
         }
 

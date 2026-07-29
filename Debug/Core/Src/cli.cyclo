@@ -3,4 +3,4 @@
 ../Core/Src/cli.c:47:6:HAL_UART_TxCpltCallback	2
 ../Core/Src/cli.c:66:14:my_atof	9
 ../Core/Src/cli.c:80:6:USART1_Rx_ISR	8
-../Core/Src/cli.c:99:6:ProcessUartRxCommand	54
+../Core/Src/cli.c:99:6:ProcessUartRxCommand	51

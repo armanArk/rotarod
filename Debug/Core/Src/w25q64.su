@@ -8,7 +8,7 @@
 ../Core/Src/w25q64.c:62:6:W25Q64_WriteEnable	8	static
 ../Core/Src/w25q64.c:68:6:W25Q64_WriteDisable	8	static
 ../Core/Src/w25q64.c:74:6:W25Q64_WaitBusy	16	static
-../Core/Src/w25q64.c:89:6:W25Q64_SectorErase	16	static
-../Core/Src/w25q64.c:100:6:W25Q64_ChipErase	8	static
-../Core/Src/w25q64.c:108:6:W25Q64_ReadData	32	static
-../Core/Src/w25q64.c:125:6:W25Q64_PageProgram	32	static
+../Core/Src/w25q64.c:87:6:W25Q64_SectorErase	16	static
+../Core/Src/w25q64.c:98:6:W25Q64_ChipErase	8	static
+../Core/Src/w25q64.c:106:6:W25Q64_ReadData	32	static
+../Core/Src/w25q64.c:123:6:W25Q64_PageProgram	32	static

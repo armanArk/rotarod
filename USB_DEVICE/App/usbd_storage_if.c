@@ -99,8 +99,12 @@ static uint32_t s_partition_offset_bytes = 0;
 // Media ready flag set at init to avoid slow checks in IsReady
 static volatile uint8_t s_media_ready = 0;
 
-// Static buffer for read-modify-write (one W25Q sector = 4KB)
-static uint8_t sector_buf[4096];
+// Sector Cache for read-modify-write (one W25Q sector = 4KB)
+#define SECTOR_SIZE 4096
+#define INVALID_SECTOR 0xFFFFFFFF
+static uint8_t s_sector_buf[SECTOR_SIZE];
+static uint32_t s_cached_sector = INVALID_SECTOR;
+static uint8_t s_cache_dirty = 0;
 
 /* USER CODE END PRIVATE_VARIABLES */
 
@@ -262,8 +266,19 @@ int8_t STORAGE_Read_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t bl
     return USBD_FAIL;
   }
 
-  W25Q64_ReadData(addr, buf, len);
+  for (uint32_t offset = 0; offset < len; offset += STORAGE_BLK_SIZ) {
+    uint32_t curr_addr = addr + offset;
+    uint32_t sector_addr = (curr_addr / SECTOR_SIZE) * SECTOR_SIZE;
+    uint32_t offset_in_sector = curr_addr % SECTOR_SIZE;
 
+    if (s_cached_sector == sector_addr) {
+      // Read from cache
+      memcpy(buf + offset, s_sector_buf + offset_in_sector, STORAGE_BLK_SIZ);
+    } else {
+      // Read from flash
+      W25Q64_ReadData(curr_addr, buf + offset, STORAGE_BLK_SIZ);
+    }
+  }
 
   return (USBD_OK);
   /* USER CODE END 6 */
@@ -289,34 +304,28 @@ int8_t STORAGE_Write_FS(uint8_t lun, uint8_t *buf, uint32_t blk_addr, uint16_t b
 
   uint32_t addr = s_partition_offset_bytes + (blk_addr * STORAGE_BLK_SIZ);
   uint32_t len  = blk_len * STORAGE_BLK_SIZ;
-  uint32_t end_addr = addr + len;
 
-  if (end_addr > (s_partition_offset_bytes + s_flash_capacity_bytes)) {
+  if ((addr + len) > (s_partition_offset_bytes + s_flash_capacity_bytes)) {
     return USBD_FAIL;
   }
 
-  // Process each 4KB W25Q sector that overlaps the write range
-  for (uint32_t se = (addr / 4096) * 4096; se < end_addr; se += 4096) {
+  for (uint32_t offset = 0; offset < len; offset += STORAGE_BLK_SIZ) {
+    uint32_t curr_addr = addr + offset;
+    uint32_t sector_addr = (curr_addr / SECTOR_SIZE) * SECTOR_SIZE;
+    uint32_t offset_in_sector = curr_addr % SECTOR_SIZE;
 
-    // 1. Read existing sector content
-    W25Q64_ReadData(se, sector_buf, 4096);
-
-    // 2. Calculate overlap between write data and this sector
-    uint32_t write_start_in_sector = (addr > se) ? (addr - se) : 0;
-    uint32_t write_end_in_sector = (end_addr < (se + 4096)) ? (end_addr - se) : 4096;
-    uint32_t copy_len = write_end_in_sector - write_start_in_sector;
-    uint32_t buf_offset = (addr > se) ? 0 : (se - addr);
-
-    // 3. Merge new data into sector buffer
-    memcpy(sector_buf + write_start_in_sector, buf + buf_offset, copy_len);
-
-    // 4. Erase the sector (required before write)
-    W25Q64_SectorErase(se);
-
-    // 5. Write back sector in 256-byte pages
-    for (uint32_t pg = 0; pg < 4096; pg += 256) {
-      W25Q64_PageProgram(se + pg, sector_buf + pg, 256);
+    if (s_cached_sector != sector_addr) {
+      // Flush old sector if dirty
+      STORAGE_Flush();
+      
+      // Load new sector
+      s_cached_sector = sector_addr;
+      W25Q64_ReadData(s_cached_sector, s_sector_buf, SECTOR_SIZE);
     }
+
+    // Modify cache
+    memcpy(s_sector_buf + offset_in_sector, buf + offset, STORAGE_BLK_SIZ);
+    s_cache_dirty = 1;
   }
 
   return (USBD_OK);
@@ -351,6 +360,22 @@ void STORAGE_UpdateCapacity(uint32_t bytes)
 void STORAGE_SetPartitionOffset(uint32_t byte_offset)
 {
   s_partition_offset_bytes = byte_offset;
+}
+
+void STORAGE_Flush(void)
+{
+  // Protect against race conditions between main loop and USB interrupt!
+  HAL_NVIC_DisableIRQ(OTG_FS_IRQn);
+  
+  if (s_cache_dirty && s_cached_sector != INVALID_SECTOR) {
+    W25Q64_SectorErase(s_cached_sector);
+    for (uint32_t pg = 0; pg < SECTOR_SIZE; pg += 256) {
+      W25Q64_PageProgram(s_cached_sector + pg, s_sector_buf + pg, 256);
+    }
+    s_cache_dirty = 0;
+  }
+  
+  HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
 }
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 

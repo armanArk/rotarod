@@ -108,6 +108,7 @@ extern USBD_StorageTypeDef USBD_Storage_Interface_fops_FS;
 void STORAGE_SetMediaReady(uint8_t ready);
 void STORAGE_UpdateCapacity(uint32_t bytes);
 void STORAGE_SetPartitionOffset(uint32_t byte_offset);
+void STORAGE_Flush(void);
 /* USER CODE END EXPORTED_FUNCTIONS */
 
 /**

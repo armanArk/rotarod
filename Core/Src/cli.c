@@ -244,11 +244,29 @@ void ProcessUartRxCommand(void) {
             } else {
                 UART_Print("\r\n[HC165] GAGAL menyimpan ke Flash!\r\n");
             }
-        } else if (strcmp(cmd, "TESTEVENT") == 0) {
-            UART_Print("\r\n[CLI] Mensimulasikan event jatuhnya tikus (Dummy)...\r\n");
-            Log_AddEvent(1000 + (rand() % 2001), Motor_GetRPM(), 3);
-            Log_FlushToCSV();
-            UART_Print("[CLI] Simulasi dummy event selesai.\r\n");
+        } else if (strcmp(cmd, "LS") == 0) {
+            UART_Print("\r\n[CLI] Membaca isi Flashdisk (Internal MCU)...\r\n");
+            if (!FS_IsMounted()) MountFS();
+            DIR dir;
+            static FILINFO fno;
+            FRESULT res = f_opendir(&dir, "/"); // Root directory
+            if (res == FR_OK) {
+                int file_count = 0;
+                for (;;) {
+                    res = f_readdir(&dir, &fno);
+                    if (res != FR_OK || fno.fname[0] == 0) break; // Break on error or end of dir
+                    char msg[128];
+                    sprintf(msg, "  -> %s (%lu bytes)\r\n", fno.fname, (unsigned long)fno.fsize);
+                    UART_Print(msg);
+                    file_count++;
+                }
+                f_closedir(&dir);
+                if (file_count == 0) UART_Print("  (Flashdisk Kosong)\r\n");
+            } else {
+                char msg[64];
+                sprintf(msg, "[Error] Gagal membuka root directory (FR=%d)\r\n", res);
+                UART_Print(msg);
+            }
         } else if (strcmp(cmd, "TRIGGER") == 0) {
             int random_lane = rand() % 5; // 0 sampai 4
             UI_TriggerFall(random_lane);
@@ -257,38 +275,6 @@ void ProcessUartRxCommand(void) {
             sprintf(msg, "\r\n[CLI] Berhasil: Lane %d, Durasi: %lu ms -> disimpan ke CSV.\r\n", 
                     random_lane + 1, (unsigned long)lanes[random_lane].duration_ms);
             UART_Print(msg);
-        } else if (strncmp(cmd, "START ", 6) == 0) {
-            char *p = pending_cmd + 6;
-            int lane = atoi(p);
-            if (lane >= 1 && lane <= 5) {
-                if (UI_StartLane(lane - 1)) {
-                    char msg[80];
-                    sprintf(msg, "\r\n[CLI] Berhasil: Timer Lane %d mulai berjalan.\r\n", lane);
-                    UART_Print(msg);
-                } else {
-                    char msg[80];
-                    sprintf(msg, "\r\n[Error] Gagal: Lane %d sudah dalam keadaan RUNNING.\r\n", lane);
-                    UART_Print(msg);
-                }
-            } else {
-                UART_Print("\r\n[Error] Lane tidak valid! Gunakan format: START 1 sampai START 5\r\n");
-            }
-        } else if (strncmp(cmd, "STOP ", 5) == 0) {
-            char *p = pending_cmd + 5;
-            int lane = atoi(p);
-            if (lane >= 1 && lane <= 5) {
-                if (UI_StopLane(lane - 1)) {
-                    char msg[80];
-                    sprintf(msg, "\r\n[CLI] Berhasil: Timer Lane %d dihentikan.\r\n", lane);
-                    UART_Print(msg);
-                } else {
-                    char msg[80];
-                    sprintf(msg, "\r\n[Error] Gagal: Lane %d sedang tidak berjalan.\r\n", lane);
-                    UART_Print(msg);
-                }
-            } else {
-                UART_Print("\r\n[Error] Lane tidak valid! Gunakan format: STOP 1 sampai STOP 5\r\n");
-            }
         } else if (strcmp(cmd, "HELP") == 0) {
             UART_Print("\r\n=== FTDI Commands ===\r\n"
                        "  MODE PID              : Potensiometer -> Target RPM -> PID\r\n"
@@ -298,10 +284,8 @@ void ProcessUartRxCommand(void) {
                        "  PID <Kp> <Ki> <Kd>   : Tune parameter PID\r\n"
                        "  TIME <HH> <MM> <SS> <DD> <MM> <YY> : Set RTC DS3231 time\r\n"
                        "  HC165 ON / OFF        : Aktifkan/Matikan input sensor (EEPROM)\r\n"
-                       "  TESTEVENT             : Simulasi dummy event (langsung ke CSV)\r\n"
-                       "  START <1-5>           : Memulai timer Lane (simulasi tombol onboard Start)\r\n"
-                       "  STOP <1-5>            : Mematikan timer Lane (simulasi tombol onboard Stop)\r\n"
                        "  TRIGGER               : Tembakkan dummy jatuh (Lane acak, Waktu acak)\r\n"
+                       "  LS                    : Lihat daftar file di dalam flashdisk\r\n"
                        "  FORMAT / FDISK        : Format flash 2 partisi (50%/50%)\r\n"
                        "  CHECKFS               : Verifikasi ukuran partisi\r\n"
                        "  HELP                  : Tampilkan daftar perintah\r\n");

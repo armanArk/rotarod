@@ -72,17 +72,15 @@ void W25Q64_WriteDisable(void) {
 }
 
 void W25Q64_WaitBusy(void) {
-    uint32_t start_tick = HAL_GetTick();
+    // Timeout counter replacing HAL_GetTick() to avoid deadlock in USB ISR
+    uint32_t timeout = 0x3FFFFF; // Approximate loop counter
 
     // Polling Bit BUSY (Bit 0) pada Status Register 1
-    while (W25Q64_ReadStatusRegister1() & 0x01) {
+    while ((W25Q64_ReadStatusRegister1() & 0x01) && timeout > 0) {
         // Refresh Independent Watchdog untuk mencegah reset saat operasi flash lama
         IWDG->KR = 0xAAAA;
 
-        // Safety timeout (misal 120 detik max untuk Chip Erase)
-        if ((HAL_GetTick() - start_tick) > 120000) {
-            break;
-        }
+        timeout--;
     }
 }
 
@@ -116,9 +114,9 @@ void W25Q64_ReadData(uint32_t addr, uint8_t *buffer, uint32_t length) {
 
     W25Q_CS_Low();
     // Kirim Perintah + Alamat
-    HAL_SPI_Transmit(&hspi1, cmd, 4, HAL_MAX_DELAY);
+    HAL_SPI_Transmit(&hspi1, cmd, 4, 100); // Finite timeout to prevent hang
     // Terima data secara bulk (lebih cepat dari loop byte per byte)
-    HAL_SPI_Receive(&hspi1, buffer, length, HAL_MAX_DELAY);
+    HAL_SPI_Receive(&hspi1, buffer, length, 1000); // 1 sec timeout
     W25Q_CS_High();
 }
 
@@ -135,9 +133,9 @@ void W25Q64_PageProgram(uint32_t addr, uint8_t *data, uint32_t length) {
     W25Q64_WriteEnable();
     W25Q_CS_Low();
     // Kirim Perintah + Alamat
-    HAL_SPI_Transmit(&hspi1, cmd, 4, HAL_MAX_DELAY);
+    HAL_SPI_Transmit(&hspi1, cmd, 4, 100);
     // Kirim Payload Data
-    HAL_SPI_Transmit(&hspi1, data, length, HAL_MAX_DELAY);
+    HAL_SPI_Transmit(&hspi1, data, length, 1000); // 1 sec timeout
     W25Q_CS_High();
 
     W25Q64_WaitBusy();
