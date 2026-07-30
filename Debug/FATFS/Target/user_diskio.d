@@ -40,8 +40,7 @@ FATFS/Target/user_diskio.o: ../FATFS/Target/user_diskio.c \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pcd.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_ll_usb.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pcd_ex.h \
- ../Middlewares/Third_Party/FatFs/src/diskio.h ../Core/Inc/w25q64.h \
- ../Core/Inc/main.h
+ ../Core/Inc/w25q64.h ../Core/Inc/main.h ../Core/Inc/cli.h
 ../Middlewares/Third_Party/FatFs/src/ff_gen_drv.h:
 ../Middlewares/Third_Party/FatFs/src/diskio.h:
 ../Middlewares/Third_Party/FatFs/src/integer.h:
@@ -85,6 +84,6 @@ FATFS/Target/user_diskio.o: ../FATFS/Target/user_diskio.c \
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pcd.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_ll_usb.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pcd_ex.h:
-../Middlewares/Third_Party/FatFs/src/diskio.h:
 ../Core/Inc/w25q64.h:
 ../Core/Inc/main.h:
+../Core/Inc/cli.h:

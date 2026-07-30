@@ -57,7 +57,6 @@
 /* External variables --------------------------------------------------------*/
 extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
 extern TIM_HandleTypeDef htim4;
-extern UART_HandleTypeDef huart1;
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -228,17 +227,6 @@ void OTG_FS_IRQHandler(void)
   /* USER CODE END OTG_FS_IRQn 1 */
 }
 
-extern void USART1_Rx_ISR(void);
-
-/**
-  * @brief This function handles USART1 global interrupt.
-  */
-void USART1_IRQHandler(void)
-{
-  USART1_Rx_ISR();
-  HAL_UART_IRQHandler(&huart1);
-}
-
 /* USER CODE BEGIN 1 */
 /**
   * @brief This function handles EXTI line[9:5] interrupts.
@@ -254,5 +242,27 @@ void EXTI9_5_IRQHandler(void)
 void EXTI15_10_IRQHandler(void)
 {
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_15);
+}
+
+/**
+  * @brief This function handles USART1 global interrupt.
+  */
+void USART1_IRQHandler(void)
+{
+  extern void USART1_Rx_ISR(void);
+  USART1_Rx_ISR(); // Process custom non-blocking RX
+  
+  extern UART_HandleTypeDef huart1;
+  uint32_t sr = USART1->SR;
+  uint32_t cr1 = USART1->CR1;
+  
+  // Only pass TX interrupts to HAL to avoid HAL disabling RXNEIE on ORE/framing errors
+  if (((sr & USART_SR_TXE) && (cr1 & USART_CR1_TXEIE)) || 
+      ((sr & USART_SR_TC) && (cr1 & USART_CR1_TCIE))) {
+      HAL_UART_IRQHandler(&huart1);
+  }
+  
+  // Force RX interrupt to stay enabled
+  USART1->CR1 |= USART_CR1_RXNEIE;
 }
 /* USER CODE END 1 */

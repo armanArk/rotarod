@@ -58,10 +58,6 @@ void Error_Handler(void);
 void UART_Print(char *msg);
 /* USER CODE END EFP */
 
-/* USER CODE BEGIN EFP */
-
-/* USER CODE END EFP */
-
 /* Private defines -----------------------------------------------------------*/
 #define DISP_CLK1_Pin GPIO_PIN_13
 #define DISP_CLK1_GPIO_Port GPIOC
@@ -77,6 +73,8 @@ void UART_Print(char *msg);
 #define SHIFT_PL_GPIO_Port GPIOA
 #define SHIFT_CP_Pin GPIO_PIN_3
 #define SHIFT_CP_GPIO_Port GPIOA
+#define ROTARY_DT_Pin GPIO_PIN_4
+#define ROTARY_DT_GPIO_Port GPIOA
 #define DISP_DIO1_Pin GPIO_PIN_0
 #define DISP_DIO1_GPIO_Port GPIOB
 #define DISP_DIO2_Pin GPIO_PIN_1

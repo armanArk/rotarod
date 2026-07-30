@@ -1,6 +1,6 @@
-../FATFS/Target/user_diskio.c:36:10:USER_GetFlashTotalSize	1
-../FATFS/Target/user_diskio.c:72:9:USER_initialize	5
-../FATFS/Target/user_diskio.c:110:9:USER_status	2
-../FATFS/Target/user_diskio.c:127:9:USER_read	2
-../FATFS/Target/user_diskio.c:152:9:USER_write	7
-../FATFS/Target/user_diskio.c:201:9:USER_ioctl	5
+../FATFS/Target/user_diskio.c:44:10:USER_GetFlashTotalSize	1
+../FATFS/Target/user_diskio.c:81:9:USER_initialize	5
+../FATFS/Target/user_diskio.c:121:9:USER_status	2
+../FATFS/Target/user_diskio.c:140:9:USER_read	2
+../FATFS/Target/user_diskio.c:170:9:USER_write	7
+../FATFS/Target/user_diskio.c:224:9:USER_ioctl	5

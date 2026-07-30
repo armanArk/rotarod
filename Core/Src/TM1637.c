@@ -92,12 +92,6 @@ static void TM1637_WriteByte(GPIO_TypeDef* CLK_Port, uint16_t CLK_Pin, GPIO_Type
 void TM1637_SetBrightness(GPIO_TypeDef* CLK_Port, uint16_t CLK_Pin, GPIO_TypeDef* DIO_Port, uint16_t DIO_Pin, uint8_t brightness) {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-    // Set semua pin DIO ke mode Input (Idle) agar tidak konflik[cite: 8]
-    GPIO_InitStruct.Pin = ALL_DIO_PINS;
-    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
     // Set pin DIO target ke mode Output Open-Drain untuk komunikasi[cite: 8]
     GPIO_InitStruct.Pin = DIO_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;

@@ -13,16 +13,13 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_storage_if.h"
-#include "w25q64.h"
-#include "main.h"
 
 /* USER CODE BEGIN INCLUDE */
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
-#define STORAGE_LUN_NBR                  1
-#define STORAGE_BLK_SIZ                  512     // USB MSC standard block size
+/* Private macro -------------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
 /* USER CODE END PV */
@@ -53,6 +50,10 @@
   * @brief Private defines.
   * @{
   */
+
+#define STORAGE_LUN_NBR                  1
+#define STORAGE_BLK_NBR                  0x10000
+#define STORAGE_BLK_SIZ                  0x200
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
 /* USER CODE END PRIVATE_DEFINES */
@@ -118,8 +119,6 @@ static uint8_t s_cache_dirty = 0;
   */
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
-// Signal from main indicating USB VBUS presence
-extern volatile uint8_t usb_connected;
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
 /* USER CODE END EXPORTED_VARIABLES */
@@ -161,7 +160,6 @@ USBD_StorageTypeDef USBD_Storage_Interface_fops_FS =
 };
 
 /* Private functions ---------------------------------------------------------*/
-
 /**
   * @brief  Initializes the storage unit (medium) over USB FS IP
   * @param  lun: Logical unit number.
@@ -216,6 +214,12 @@ int8_t STORAGE_GetCapacity_FS(uint8_t lun, uint32_t *block_num, uint16_t *block_
   return (USBD_OK);
   /* USER CODE END 3 */
 }
+
+/**
+  * @brief   Checks whether the medium is ready.
+  * @param  lun:  Logical unit number.
+  * @retval USBD_OK if all operations are OK else USBD_FAIL
+  */
 int8_t STORAGE_IsReady_FS(uint8_t lun)
 {
   /* USER CODE BEGIN 4 */
@@ -377,9 +381,12 @@ void STORAGE_Flush(void)
   
   HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
 }
-/* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
-/* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
+void STORAGE_Invalidate(void)
+{
+  s_cached_sector = INVALID_SECTOR;
+  s_cache_dirty = 0;
+}
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**
@@ -389,3 +396,4 @@ void STORAGE_Flush(void)
 /**
   * @}
   */
+

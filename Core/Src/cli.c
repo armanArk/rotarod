@@ -117,7 +117,7 @@ void ProcessUartRxCommand(void) {
             strcmp(cmd, "PARTITION") == 0 ||
             strcmp(cmd, "FDISK") == 0 ||
             strcmp(cmd, "FORMATFS") == 0) {
-            UART_Print("\r\n[FTDI Command] Formatting flash into 2 partitions (50%/50%)...\r\n");
+            UART_Print("\r\n[FTDI Command] Formatting flash disk...\r\n");
             UnmountAllFS();
             FormatFS();
         } else if (strcmp(cmd, "CHECKFS") == 0) {
@@ -192,8 +192,8 @@ void ProcessUartRxCommand(void) {
             } else {
                 UART_Print("\r\n[LOAD] Tidak ada settings tersimpan di Flash.\r\n");
             }
-
-            char *p = cmd + 4;
+        } else if (strncmp(cmd, "MODE ", 5) == 0) {
+            char *p = cmd + 5;
             while (*p == ' ') p++;
             if (strcmp(p, "PID") == 0) {
                 Motor_SetMode(MOTOR_MODE_PID);
@@ -286,8 +286,8 @@ void ProcessUartRxCommand(void) {
                        "  HC165 ON / OFF        : Aktifkan/Matikan input sensor (EEPROM)\r\n"
                        "  TRIGGER               : Tembakkan dummy jatuh (Lane acak, Waktu acak)\r\n"
                        "  LS                    : Lihat daftar file di dalam flashdisk\r\n"
-                       "  FORMAT / FDISK        : Format flash 2 partisi (50%/50%)\r\n"
-                       "  CHECKFS               : Verifikasi ukuran partisi\r\n"
+                       "  FORMAT / FDISK        : Format seluruh flash disk\r\n"
+                       "  CHECKFS               : Verifikasi partisi flash disk\r\n"
                        "  HELP                  : Tampilkan daftar perintah\r\n");
         } else {
             char err[64];

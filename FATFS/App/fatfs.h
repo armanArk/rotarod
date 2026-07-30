@@ -32,11 +32,8 @@
 /* USER CODE END Includes */
 
 extern uint8_t retUSER; /* Return value for USER */
-extern uint8_t retUSER2; /* Return value for second logical drive */
 extern char USERPath[4]; /* USER logical drive path */
-extern char USERPath2[4]; /* Secondary logical drive path */
 extern FATFS USERFatFS; /* File system object for USER logical drive */
-extern FATFS USERFatFS2; /* File system object for secondary logical drive */
 extern FIL USERFile; /* File object for USER */
 
 void MX_FATFS_Init(void);
