@@ -739,9 +739,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(ROTARY_DT_GPIO_Port, &GPIO_InitStruct);
   
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  // PRIORITY DITURUNKAN KE 5 AGAR TIDAK MEMBUAT USB NGE-HANG SAAT ENCODER DIPUTAR
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI0_IRQn);
-  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI4_IRQn);
   /* USER CODE END MX_GPIO_Init_2 */
 }
