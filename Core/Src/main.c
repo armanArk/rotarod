@@ -3,10 +3,12 @@
   ******************************************************************************
   * @file    main.c
   * @brief   Rotarod + FatFs on W25Q Flash + USB MSC
-  *          - Partition 0 (0:): event log (ROTAROD.CSV)
-  *          - Partition 1 (1:): export copy for Windows USB MSC
-  *          - Auto unmount/mount on USB plug/unplug
-  *          - Auto-reformat if FS size != half flash size
+  *          - Single-partition SFD format (no MBR) for Windows compatibility
+  *          - USB MSC exposes full flash to Windows when cable connected
+  *          - VBUS detection via voltage divider on PA8
+  *          - Rotary encoder on PA0/PA4 for RPM setpoint adjustment
+  *          - DS3231 RTC for event timestamping
+  *          - USB hotplug handled via VBUS state machine (USB_SM_*)
   ******************************************************************************
   */
 /* USER CODE END Header */
