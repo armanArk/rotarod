@@ -1,4 +1,4 @@
-/* USER CODE BEGIN Header */
+﻿/* USER CODE BEGIN Header */
 /**
   ******************************************************************************
   * @file           : usbd_storage_if.c
@@ -366,21 +366,7 @@ void STORAGE_SetPartitionOffset(uint32_t byte_offset)
   s_partition_offset_bytes = byte_offset;
 }
 
-void STORAGE_Flush(void)
-{
-  // Protect against race conditions between main loop and USB interrupt!
-  HAL_NVIC_DisableIRQ(OTG_FS_IRQn);
-  
-  if (s_cache_dirty && s_cached_sector != INVALID_SECTOR) {
-    W25Q64_SectorErase(s_cached_sector);
-    for (uint32_t pg = 0; pg < SECTOR_SIZE; pg += 256) {
-      W25Q64_PageProgram(s_cached_sector + pg, s_sector_buf + pg, 256);
-    }
-    s_cache_dirty = 0;
-  }
-  
-  HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
-}
+void STORAGE_Flush(void){if(s_cache_dirty&&s_cached_sector!=INVALID_SECTOR){W25Q64_SectorErase(s_cached_sector);for(uint32_t pg=0;pg<SECTOR_SIZE;pg+=256){W25Q64_PageProgram(s_cached_sector+pg,s_sector_buf+pg,256);}s_cache_dirty=0;}}
 
 void STORAGE_Invalidate(void)
 {
@@ -396,4 +382,5 @@ void STORAGE_Invalidate(void)
 /**
   * @}
   */
+
 
