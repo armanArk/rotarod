@@ -36,24 +36,31 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-extern USBD_HandleTypeDef hUsbDeviceFS;
-extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
-extern void STORAGE_Invalidate(void);
+
+/* USB State Machine states */
+typedef enum {
+    USB_SM_IDLE = 0,
+    USB_SM_PLUG_SETTLE,
+    USB_SM_CONN_START,
+    USB_SM_CONN_EXPORT,
+    USB_SM_CONN_WAIT,
+    USB_SM_DISCONN_START,
+    USB_SM_DISCONN_WAIT
+} UsbSmState_t;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define USB_CHECK_MS      100
+#define VBUS_DEBOUNCE_MS  200
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc1;
-
 I2C_HandleTypeDef hi2c1;
 
 SPI_HandleTypeDef hspi1;
@@ -64,30 +71,27 @@ TIM_HandleTypeDef htim5;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-#define USB_CHECK_MS        100
-// Debounce for VBUS sense EXTI to avoid duplicate open events (ms)
-#define VBUS_DEBOUNCE_MS    200
-
-// USB
 uint8_t usb_connected = 0;
 static uint8_t last_usb_state = 0;
-// VBUS EXTI event pending flag
 volatile uint8_t vbus_event_pending = 0;
-
 uint32_t last_usb_check = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM5_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM4_Init(void);
-/* USER CODE BEGIN PFP */
 
+/* USER CODE BEGIN PFP */
+extern USBD_HandleTypeDef hUsbDeviceFS;
+extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
+extern void STORAGE_Invalidate(void);
+extern void Motor_RotaryIncrement(void);
+extern void Motor_RotaryDecrement(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -148,7 +152,6 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  // MX_ADC1_Init(); // ADC removed for Rotary Encoder
   MX_I2C1_Init();
   MX_SPI1_Init();
   MX_TIM5_Init();
@@ -190,8 +193,6 @@ int main(void)
     // PWM
     HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_2);
     __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 0);
-
-    // ADC (Removed for Rotary Encoder)
 
     // SPI Flash init
     W25Q64_Init();
@@ -246,15 +247,6 @@ int main(void)
         }
     }
 
-    typedef enum {
-        USB_SM_IDLE = 0,
-        USB_SM_PLUG_SETTLE,
-        USB_SM_CONN_START,
-        USB_SM_CONN_EXPORT,
-        USB_SM_CONN_WAIT,
-        USB_SM_DISCONN_START,
-        USB_SM_DISCONN_WAIT
-    } UsbSmState_t;
     UsbSmState_t usb_sm_state = USB_SM_IDLE;
     uint32_t usb_sm_tick = 0;
   /* USER CODE END 2 */
@@ -309,8 +301,9 @@ int main(void)
                 
             case USB_SM_CONN_START:
                 UART_Print("USB connected - exposing flash\r\n");
+                HAL_PCD_DevConnect(&hpcd_USB_OTG_FS); // Symmetrical: DevDisconnect is called on disconnect
                 STORAGE_UpdateCapacity(FS_GetFlashCapacity());
-                STORAGE_SetPartitionOffset(0); // Export entire flash
+                STORAGE_SetPartitionOffset(0);
                 STORAGE_SetMediaReady(1);
                 usb_sm_state = USB_SM_CONN_WAIT;
                 break;
@@ -684,30 +677,24 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(DISP_CLK7_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-  /* Revert VBUS to NOPULL because PULLDOWN lowers the voltage too much on the divider */
-  GPIO_InitStruct.Pin = USB_VBUS_SENSE_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(USB_VBUS_SENSE_GPIO_Port, &GPIO_InitStruct);
 
-  /* Configure ROTARY_CLK_Pin (PA0) as EXTI0 */
+  /* Configure ROTARY_CLK_Pin (PA0) as EXTI0 with priority 5 (below USB OTG at 0) */
   GPIO_InitStruct.Pin = ROTARY_CLK_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(ROTARY_CLK_GPIO_Port, &GPIO_InitStruct);
-  
-  /* Configure ROTARY_DT_Pin (PA4) as EXTI4 */
+
+  /* Configure ROTARY_DT_Pin (PA4) as EXTI4 with priority 5 */
   GPIO_InitStruct.Pin = ROTARY_DT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(ROTARY_DT_GPIO_Port, &GPIO_InitStruct);
-  
-  /* EXTI interrupt init*/
-  // PRIORITY DITURUNKAN KE 5 AGAR TIDAK MEMBUAT USB NGE-HANG SAAT ENCODER DIPUTAR
+
   HAL_NVIC_SetPriority(EXTI0_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI0_IRQn);
   HAL_NVIC_SetPriority(EXTI4_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI4_IRQn);
+
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
@@ -717,24 +704,20 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
         static const int8_t encoder_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
         static uint8_t old_AB = 0;
         static int8_t counter = 0;
-        
+
         uint8_t A = HAL_GPIO_ReadPin(ROTARY_CLK_GPIO_Port, ROTARY_CLK_Pin) == GPIO_PIN_SET ? 1 : 0;
         uint8_t B = HAL_GPIO_ReadPin(ROTARY_DT_GPIO_Port, ROTARY_DT_Pin) == GPIO_PIN_SET ? 1 : 0;
-        
-        old_AB <<= 2;                   // Shift previous state
-        old_AB |= ( (A << 1) | B );     // Add current state
-        old_AB &= 0x0f;                 // Keep only lowest 4 bits
-        
-        int8_t move = encoder_states[old_AB];
-        counter += move;
-        
-        // 4 steps per detent for most standard rotary encoders
-        if (counter >= 4) { 
-            extern void Motor_RotaryIncrement(void);
+
+        old_AB <<= 2;
+        old_AB |= ((A << 1) | B);
+        old_AB &= 0x0f;
+
+        counter += encoder_states[old_AB];
+
+        if (counter >= 4) {
             Motor_RotaryIncrement();
             counter = 0;
         } else if (counter <= -4) {
-            extern void Motor_RotaryDecrement(void);
             Motor_RotaryDecrement();
             counter = 0;
         }
