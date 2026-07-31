@@ -4,6 +4,6 @@
 ../Core/Src/ds3231.c:28:9:DS3231_ReadByte	40	static
 ../Core/Src/ds3231.c:34:6:DS3231_WriteByte	32	static
 ../Core/Src/ds3231.c:38:6:DS3231_ReadTime	48	static
-../Core/Src/ds3231.c:51:6:DS3231_SetTime	48	static
-../Core/Src/ds3231.c:64:7:DS3231_ReadTemperature	16	static
-../Core/Src/ds3231.c:71:6:DS3231_PrintTime	120	static
+../Core/Src/ds3231.c:53:6:DS3231_SetTime	48	static
+../Core/Src/ds3231.c:66:7:DS3231_ReadTemperature	16	static
+../Core/Src/ds3231.c:73:6:DS3231_PrintTime	120	static

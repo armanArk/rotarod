@@ -1,4 +1,5 @@
 #include "motor_control.h"
+#include <stdio.h>
 
 extern ADC_HandleTypeDef hadc1;
 extern TIM_HandleTypeDef htim4;
@@ -26,7 +27,7 @@ static volatile float precise_rpm = 0.0f;
 static volatile uint32_t bldc_pulse_count = 0;
 static uint32_t adc_raw = 0;
 static uint32_t pwm_duty = 0;
-static uint32_t set_value = 0;
+static volatile uint32_t set_value = 0;
 
 // Default PID akan digunakan jika EEPROM kosong
 static float pid_kp = 0.50f;
@@ -35,7 +36,7 @@ static float pid_kd = 0.00f;
 static float pid_integral = 0.0f;
 static float pid_prev_error = 0.0f;
 
-static uint32_t last_capture = 0;
+
 static uint32_t last_capture_time = 0;
 static volatile uint32_t timer_overflow = 0;
 static uint32_t overflow_count = 0;
@@ -139,38 +140,25 @@ void Motor_Process(void) {
             }
         }
 
-        // Baca ADC (polling, 1× per 50ms - sesuai untuk potensiometer)
-        HAL_ADC_Start(&hadc1);
-        if (HAL_ADC_PollForConversion(&hadc1, 5) == HAL_OK) {
-            adc_raw = HAL_ADC_GetValue(&hadc1);
-        }
-
+        // ADC dibuang (diganti Rotary Encoder)
         last_adc_tick = now;
 
         if (control_mode == MOTOR_MODE_DIRECT) {
             // =====================================================
-            // MODE DIRECT: Potensiometer langsung ke PWM (open loop)
-            // ADC 0-4095 dipetakan langsung ke PWM 0-PWM_MAX_DUTY
+            // MODE DIRECT: Rotary Encoder langsung ke PWM (open loop)
             // =====================================================
-            pwm_duty = (adc_raw * PWM_MAX_DUTY) / 4095;
+            // pwm_duty diubah langsung oleh interrupt rotary encoder
             set_value = Motor_GetRPM(); // SET menampilkan RPM aktual saat ini
             pid_integral = 0.0f;
             pid_prev_error = 0.0f;
 
         } else {
             // =====================================================
-            // MODE PID & CLI: Potensiometer / CLI -> Target RPM -> PID -> PWM
+            // MODE PID & CLI: Rotary Encoder / CLI -> Target RPM -> PID -> PWM
             // =====================================================
             if (control_mode == MOTOR_MODE_PID) {
-                // Mode PID: ADC menentukan set_value (RPM target)
-                // Hysteresis: hanya update set_value jika berubah >= 2 RPM
-                // Mencegah SET terus loncat antara 2 nilai saat potensiometer di perbatasan
-                uint32_t new_set = (adc_raw * 150) / 4095;
-                if (new_set > 150) new_set = 150;
-                int32_t diff = (int32_t)new_set - (int32_t)set_value;
-                if (diff >= 2 || diff <= -2) {
-                    set_value = new_set;
-                }
+                // Mode PID: set_value diubah oleh Rotary Encoder via EXTI callback
+                // (Tidak perlu polling ADC lagi)
             }
             // Mode CLI: set_value sudah di-set dari luar via Motor_SetCLITarget()
 
@@ -285,5 +273,35 @@ void Motor_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM4) {
         timer_overflow++;
         overflow_count++;
+    }
+}
+// ====================================================
+// ROTARY ENCODER API
+// ====================================================
+void Motor_RotaryIncrement(void) {
+    char buf[64];
+    if (control_mode == MOTOR_MODE_PID || control_mode == MOTOR_MODE_CLI) {
+        if (set_value < 150) set_value++;
+        sprintf(buf, "[ROTARY CW] Mode: PID/CLI, Target RPM: %lu\r\n", (unsigned long)set_value);
+        UART_Print(buf);
+    } else if (control_mode == MOTOR_MODE_DIRECT) {
+        if (pwm_duty + 10 <= PWM_MAX_DUTY) pwm_duty += 10;
+        else pwm_duty = PWM_MAX_DUTY;
+        sprintf(buf, "[ROTARY CW] Mode: DIRECT, PWM: %lu\r\n", (unsigned long)pwm_duty);
+        UART_Print(buf);
+    }
+}
+
+void Motor_RotaryDecrement(void) {
+    char buf[64];
+    if (control_mode == MOTOR_MODE_PID || control_mode == MOTOR_MODE_CLI) {
+        if (set_value > 0) set_value--;
+        sprintf(buf, "[ROTARY CCW] Mode: PID/CLI, Target RPM: %lu\r\n", (unsigned long)set_value);
+        UART_Print(buf);
+    } else if (control_mode == MOTOR_MODE_DIRECT) {
+        if (pwm_duty >= 10) pwm_duty -= 10;
+        else pwm_duty = 0;
+        sprintf(buf, "[ROTARY CCW] Mode: DIRECT, PWM: %lu\r\n", (unsigned long)pwm_duty);
+        UART_Print(buf);
     }
 }

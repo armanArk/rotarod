@@ -35,7 +35,7 @@ void EEPROM_Read(uint16_t addr, uint8_t *data, uint16_t size) {
     if (!eeprom_ready) return;
     
     // AT24C32 uses 16-bit memory address
-    HAL_I2C_Mem_Read(&hi2c1, eeprom_addr << 1, addr, I2C_MEMADD_SIZE_16BIT, data, size, HAL_MAX_DELAY);
+    HAL_I2C_Mem_Read(&hi2c1, eeprom_addr << 1, addr, I2C_MEMADD_SIZE_16BIT, data, size, 100);
 }
 
 void EEPROM_Write(uint16_t addr, const uint8_t *data, uint16_t size) {

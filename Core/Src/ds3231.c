@@ -27,18 +27,20 @@ void DS3231_Init(void) {
 
 uint8_t DS3231_ReadByte(uint8_t reg) {
     uint8_t data = 0;
-    HAL_I2C_Mem_Read(&hi2c1, DS3231_ADDR << 1, reg, I2C_MEMADD_SIZE_8BIT, &data, 1, HAL_MAX_DELAY);
+    HAL_I2C_Mem_Read(&hi2c1, DS3231_ADDR << 1, reg, I2C_MEMADD_SIZE_8BIT, &data, 1, 100);
     return data;
 }
 
 void DS3231_WriteByte(uint8_t reg, uint8_t data) {
-    HAL_I2C_Mem_Write(&hi2c1, DS3231_ADDR << 1, reg, I2C_MEMADD_SIZE_8BIT, &data, 1, HAL_MAX_DELAY);
+    HAL_I2C_Mem_Write(&hi2c1, DS3231_ADDR << 1, reg, I2C_MEMADD_SIZE_8BIT, &data, 1, 100);
 }
 
 void DS3231_ReadTime(uint8_t *sec, uint8_t *min, uint8_t *hour,
                      uint8_t *day, uint8_t *date, uint8_t *month, uint8_t *year) {
     uint8_t buffer[7];
-    HAL_I2C_Mem_Read(&hi2c1, DS3231_ADDR << 1, DS3231_REG_SEC, I2C_MEMADD_SIZE_8BIT, buffer, 7, HAL_MAX_DELAY);
+    if (HAL_I2C_Mem_Read(&hi2c1, DS3231_ADDR << 1, DS3231_REG_SEC, I2C_MEMADD_SIZE_8BIT, buffer, 7, 100) != HAL_OK) {
+        memset(buffer, 0, 7);
+    }
     *sec   = bcd_to_dec(buffer[0] & 0x7F); // bit 7 = OSC stop flag
     *min   = bcd_to_dec(buffer[1] & 0x7F);
     *hour  = bcd_to_dec(buffer[2] & 0x3F); // 24-hour mode
@@ -58,7 +60,7 @@ void DS3231_SetTime(uint8_t sec, uint8_t min, uint8_t hour,
     buffer[4] = dec_to_bcd(date);
     buffer[5] = dec_to_bcd(month);
     buffer[6] = dec_to_bcd(year);
-    HAL_I2C_Mem_Write(&hi2c1, DS3231_ADDR << 1, DS3231_REG_SEC, I2C_MEMADD_SIZE_8BIT, buffer, 7, HAL_MAX_DELAY);
+    HAL_I2C_Mem_Write(&hi2c1, DS3231_ADDR << 1, DS3231_REG_SEC, I2C_MEMADD_SIZE_8BIT, buffer, 7, 100);
 }
 
 float DS3231_ReadTemperature(void) {

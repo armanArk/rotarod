@@ -3,7 +3,7 @@
 ../Core/Src/ds3231.c:18:6:DS3231_Init	2
 ../Core/Src/ds3231.c:28:9:DS3231_ReadByte	1
 ../Core/Src/ds3231.c:34:6:DS3231_WriteByte	1
-../Core/Src/ds3231.c:38:6:DS3231_ReadTime	1
-../Core/Src/ds3231.c:51:6:DS3231_SetTime	1
-../Core/Src/ds3231.c:64:7:DS3231_ReadTemperature	1
-../Core/Src/ds3231.c:71:6:DS3231_PrintTime	1
+../Core/Src/ds3231.c:38:6:DS3231_ReadTime	2
+../Core/Src/ds3231.c:53:6:DS3231_SetTime	1
+../Core/Src/ds3231.c:66:7:DS3231_ReadTemperature	1
+../Core/Src/ds3231.c:73:6:DS3231_PrintTime	1

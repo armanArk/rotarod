@@ -100,22 +100,15 @@ void FormatFS(void) {
     sprintf(dbg, "Partition size: %lu sectors\r\n", part_sizes[0]);
     UART_Print(dbg);
 
-    fmt_fr = f_fdisk(0, part_sizes, work);
-    sprintf(dbg, "f_fdisk ret=%d\r\n", fmt_fr);
-    UART_Print(dbg);
+    FRESULT fmt_fr;
+    char dbg[64];
 
-    if (fmt_fr == FR_OK) {
-        // Temporarily force FatFs to format Partition 1 (MBR format) instead of SFD
-        extern PARTITION VolToPart[];
-        VolToPart[0].pt = 1;
-        
-        fmt_fr = f_mkfs(USERPath, FM_ANY | FM_FAT32, 0, work, sizeof(work));
-        sprintf(dbg, "f_mkfs(0:) ret=%d\r\n", fmt_fr);
-        UART_Print(dbg);
-        
-        // Restore to auto-detect mode so it mounts anything Windows creates
-        VolToPart[0].pt = 0;
-    }
+    // Format directly as SFD (Super Floppy Disk) - No MBR.
+    // This is much more compatible with Windows for removable USB drives
+    // and avoids Windows caching the old 2-partition MBR layout!
+    fmt_fr = f_mkfs(USERPath, FM_ANY | FM_SFD, 0, work, sizeof(work));
+    sprintf(dbg, "f_mkfs SFD ret=%d\r\n", fmt_fr);
+    UART_Print(dbg);
 
     if (fmt_fr == FR_OK && VerifyBootSector()) {
         UART_Print("Single-partition format OK\r\n");

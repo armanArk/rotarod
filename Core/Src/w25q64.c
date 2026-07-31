@@ -19,7 +19,7 @@ static inline void W25Q_CS_High(void) {
 
 static uint8_t W25Q_SPI_Transceive(uint8_t tx) {
     uint8_t rx = 0;
-    HAL_SPI_TransmitReceive(&hspi1, &tx, &rx, 1, HAL_MAX_DELAY);
+    HAL_SPI_TransmitReceive(&hspi1, &tx, &rx, 1, 100);
     return rx;
 }
 

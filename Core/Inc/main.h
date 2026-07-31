@@ -65,8 +65,8 @@ void UART_Print(char *msg);
 #define DISP_CLK5_GPIO_Port GPIOC
 #define DISP_CLK6_Pin GPIO_PIN_15
 #define DISP_CLK6_GPIO_Port GPIOC
-#define POTENTIOMETER_Pin GPIO_PIN_0
-#define POTENTIOMETER_GPIO_Port GPIOA
+#define ROTARY_CLK_Pin GPIO_PIN_0
+#define ROTARY_CLK_GPIO_Port GPIOA
 #define BLDC_ANALOG_Pin GPIO_PIN_1
 #define BLDC_ANALOG_GPIO_Port GPIOA
 #define SHIFT_PL_Pin GPIO_PIN_2

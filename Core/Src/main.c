@@ -144,7 +144,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_ADC1_Init();
+  // MX_ADC1_Init(); // ADC removed for Rotary Encoder
   MX_I2C1_Init();
   MX_SPI1_Init();
   MX_TIM5_Init();
@@ -153,6 +153,9 @@ int main(void)
   MX_USB_DEVICE_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+    // Enable UART RX Interrupt
+    USART1->CR1 |= USART_CR1_RXNEIE;
+
     // 74HC165
     HC165_SetPins(SHIFT_PL_GPIO_Port, SHIFT_PL_Pin, SHIFT_CP_GPIO_Port, SHIFT_CP_Pin,
                   SHIFT_Q7_GPIO_Port, SHIFT_Q7_Pin);
@@ -183,8 +186,7 @@ int main(void)
     HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_2);
     __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 0);
 
-    // ADC
-    HAL_ADC_Start(&hadc1);
+    // ADC (Removed for Rotary Encoder)
 
     // SPI Flash init
     W25Q64_Init();
@@ -673,7 +675,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, DISP_CLK1_Pin|DISP_CLK5_Pin|DISP_CLK6_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, SHIFT_PL_Pin|SHIFT_CP_Pin|ROTARY_DT_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, SHIFT_PL_Pin|SHIFT_CP_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, DISP_DIO1_Pin|DISP_DIO2_Pin|DISP_DIO3_Pin|DISP_DIO7_Pin
@@ -687,8 +689,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SHIFT_PL_Pin SHIFT_CP_Pin ROTARY_DT_Pin */
-  GPIO_InitStruct.Pin = SHIFT_PL_Pin|SHIFT_CP_Pin|ROTARY_DT_Pin;
+  /*Configure GPIO pins : SHIFT_PL_Pin SHIFT_CP_Pin */
+  GPIO_InitStruct.Pin = SHIFT_PL_Pin|SHIFT_CP_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -718,12 +720,55 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(DISP_CLK7_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-
+  /* Configure ROTARY_CLK_Pin (PA0) as EXTI0 */
+  GPIO_InitStruct.Pin = ROTARY_CLK_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(ROTARY_CLK_GPIO_Port, &GPIO_InitStruct);
+  
+  /* Configure ROTARY_DT_Pin (PA4) as EXTI4 */
+  GPIO_InitStruct.Pin = ROTARY_DT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(ROTARY_DT_GPIO_Port, &GPIO_InitStruct);
+  
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == ROTARY_CLK_Pin || GPIO_Pin == ROTARY_DT_Pin) {
+        static const int8_t encoder_states[] = {0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0};
+        static uint8_t old_AB = 0;
+        static int8_t counter = 0;
+        
+        uint8_t A = HAL_GPIO_ReadPin(ROTARY_CLK_GPIO_Port, ROTARY_CLK_Pin) == GPIO_PIN_SET ? 1 : 0;
+        uint8_t B = HAL_GPIO_ReadPin(ROTARY_DT_GPIO_Port, ROTARY_DT_Pin) == GPIO_PIN_SET ? 1 : 0;
+        
+        old_AB <<= 2;                   // Shift previous state
+        old_AB |= ( (A << 1) | B );     // Add current state
+        old_AB &= 0x0f;                 // Keep only lowest 4 bits
+        
+        int8_t move = encoder_states[old_AB];
+        counter += move;
+        
+        // 4 steps per detent for most standard rotary encoders
+        if (counter >= 4) { 
+            extern void Motor_RotaryIncrement(void);
+            Motor_RotaryIncrement();
+            counter = 0;
+        } else if (counter <= -4) {
+            extern void Motor_RotaryDecrement(void);
+            Motor_RotaryDecrement();
+            counter = 0;
+        }
+    }
+}
 /* USER CODE END 4 */
 
 /**
