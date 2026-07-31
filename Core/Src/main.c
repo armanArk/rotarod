@@ -720,6 +720,12 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(DISP_CLK7_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* Fix VBUS floating issue (CubeMX sets it to NOPULL) */
+  GPIO_InitStruct.Pin = USB_VBUS_SENSE_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(USB_VBUS_SENSE_GPIO_Port, &GPIO_InitStruct);
+
   /* Configure ROTARY_CLK_Pin (PA0) as EXTI0 */
   GPIO_InitStruct.Pin = ROTARY_CLK_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
