@@ -156,6 +156,9 @@ int main(void)
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
     
+    // Disconnect DP pull-up initially until VBUS is physically settled
+    HAL_PCD_DevDisconnect(&hpcd_USB_OTG_FS);
+
     // Enable UART RX Interrupt
     USART1->CR1 |= USART_CR1_RXNEIE;
 
@@ -246,6 +249,7 @@ int main(void)
 
     typedef enum {
         USB_SM_IDLE = 0,
+        USB_SM_PLUG_SETTLE,
         USB_SM_CONN_START,
         USB_SM_CONN_EXPORT,
         USB_SM_CONN_WAIT,
@@ -278,7 +282,8 @@ int main(void)
                 if (HAL_GetTick() < 2000) new_usb = 0; // Ignore VBUS during early boot
                 
                 if (new_usb && !last_usb_state) {
-                    usb_sm_state = USB_SM_CONN_START;
+                    usb_sm_tick = HAL_GetTick();
+                    usb_sm_state = USB_SM_PLUG_SETTLE;
                 } else if (!new_usb && last_usb_state) {
                     usb_sm_state = USB_SM_DISCONN_START;
                 }
@@ -297,8 +302,15 @@ int main(void)
             case USB_SM_CONN_EXPORT:
                 break;
 
+            case USB_SM_PLUG_SETTLE:
+                if (HAL_GetTick() - usb_sm_tick >= 250) { // 250ms debounce for connector to physically mate
+                    usb_sm_state = USB_SM_CONN_START;
+                }
+                break;
+                
             case USB_SM_CONN_START:
                 UART_Print("USB connected - exposing flash\r\n");
+                HAL_PCD_DevConnect(&hpcd_USB_OTG_FS);
                 STORAGE_UpdateCapacity(FS_GetFlashCapacity());
                 STORAGE_SetPartitionOffset(0); // Export entire flash
                 STORAGE_SetMediaReady(1);
@@ -310,6 +322,7 @@ int main(void)
 
             case USB_SM_DISCONN_START:
                 UART_Print("USB disconnected - unmounting\r\n");
+                HAL_PCD_DevDisconnect(&hpcd_USB_OTG_FS);
                 STORAGE_SetMediaReady(0);
                 usb_sm_tick = HAL_GetTick();
                 usb_sm_state = USB_SM_DISCONN_WAIT;
