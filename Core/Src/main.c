@@ -268,8 +268,8 @@ int main(void)
         Motor_Process();
 
         // USB VBUS detection (handled by EXTI or periodic poll)
-        // Jika sedang idle, kita boleh cek perubahan VBUS
-        if (usb_sm_state == USB_SM_IDLE) {
+        // Kita boleh cek perubahan VBUS saat idle ATAU saat sedang tersambung
+        if (usb_sm_state == USB_SM_IDLE || usb_sm_state == USB_SM_CONN_WAIT) {
             if (vbus_event_pending || (HAL_GetTick() - last_usb_check >= USB_CHECK_MS)) {
                 uint8_t new_usb = HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin);
                 if (HAL_GetTick() < 2000) new_usb = 0; // Ignore VBUS during early boot
