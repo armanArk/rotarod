@@ -20,6 +20,13 @@ void CheckAndFormatIfMismatch(void);
 uint8_t FS_IsMounted(void);
 uint8_t FS_IsFormatted(void);
 
+typedef struct {
+    char timestamp[32]; // Format: DD/MM/YY HH:MM:SS
+    uint32_t duration_ms;
+    uint16_t rpm;
+    uint8_t lane;
+} RotarodEvent;
+
 // Event Logging
 void Log_AddEvent(uint32_t duration_ms, uint16_t rpm_val, uint8_t lane);
 void Log_FlushToCSV(void);
