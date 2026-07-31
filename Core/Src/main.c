@@ -153,6 +153,9 @@ int main(void)
   MX_USB_DEVICE_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+    // Stop USB initially until VBUS is detected (prevents Windows errors when unplugged)
+    USBD_Stop(&hUsbDeviceFS);
+
     // Enable UART RX Interrupt
     USART1->CR1 |= USART_CR1_RXNEIE;
 
@@ -296,6 +299,7 @@ int main(void)
 
             case USB_SM_CONN_START:
                 UART_Print("USB connected - exposing flash\r\n");
+                USBD_Start(&hUsbDeviceFS);
                 STORAGE_UpdateCapacity(FS_GetFlashCapacity());
                 STORAGE_SetPartitionOffset(0); // Export entire flash
                 STORAGE_SetMediaReady(1);
@@ -307,6 +311,7 @@ int main(void)
 
             case USB_SM_DISCONN_START:
                 UART_Print("USB disconnected - unmounting\r\n");
+                USBD_Stop(&hUsbDeviceFS);
                 STORAGE_SetMediaReady(0);
                 usb_sm_tick = HAL_GetTick();
                 usb_sm_state = USB_SM_DISCONN_WAIT;
@@ -720,10 +725,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(DISP_CLK7_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-  /* Fix VBUS floating issue (CubeMX sets it to NOPULL) */
+  /* Revert VBUS to NOPULL because PULLDOWN lowers the voltage too much on the divider */
   GPIO_InitStruct.Pin = USB_VBUS_SENSE_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USB_VBUS_SENSE_GPIO_Port, &GPIO_InitStruct);
 
   /* Configure ROTARY_CLK_Pin (PA0) as EXTI0 */
