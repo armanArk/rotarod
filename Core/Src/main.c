@@ -35,6 +35,7 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 extern USBD_HandleTypeDef hUsbDeviceFS;
+extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
 extern void STORAGE_Invalidate(void);
 /* USER CODE END PTD */
 
@@ -154,8 +155,8 @@ int main(void)
   MX_USB_DEVICE_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-    // Stop USB initially until VBUS is detected (prevents Windows errors when unplugged)
-    USBD_Stop(&hUsbDeviceFS);
+    // Disconnect DP pull-up initially until VBUS is detected (keeps USB core running but host won't enumerate yet)
+    HAL_PCD_DevDisconnect(&hpcd_USB_OTG_FS);
 
     // Enable UART RX Interrupt
     USART1->CR1 |= USART_CR1_RXNEIE;
@@ -300,7 +301,7 @@ int main(void)
 
             case USB_SM_CONN_START:
                 UART_Print("USB connected - exposing flash\r\n");
-                USBD_Start(&hUsbDeviceFS);
+                HAL_PCD_DevConnect(&hpcd_USB_OTG_FS);
                 STORAGE_UpdateCapacity(FS_GetFlashCapacity());
                 STORAGE_SetPartitionOffset(0); // Export entire flash
                 STORAGE_SetMediaReady(1);
@@ -312,7 +313,7 @@ int main(void)
 
             case USB_SM_DISCONN_START:
                 UART_Print("USB disconnected - unmounting\r\n");
-                USBD_Stop(&hUsbDeviceFS);
+                HAL_PCD_DevDisconnect(&hpcd_USB_OTG_FS);
                 STORAGE_SetMediaReady(0);
                 usb_sm_tick = HAL_GetTick();
                 usb_sm_state = USB_SM_DISCONN_WAIT;
