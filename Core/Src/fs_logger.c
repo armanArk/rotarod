@@ -100,9 +100,6 @@ void FormatFS(void) {
     sprintf(dbg, "Partition size: %lu sectors\r\n", part_sizes[0]);
     UART_Print(dbg);
 
-    FRESULT fmt_fr;
-    char dbg[64];
-
     // Format directly as SFD (Super Floppy Disk) - No MBR.
     // This is much more compatible with Windows for removable USB drives
     // and avoids Windows caching the old 2-partition MBR layout!
