@@ -72,6 +72,7 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 uint8_t usb_connected = 0;
+uint8_t usb_function_enabled = 1; // CLI: "USB OFF" → 0 (nonaktifkan USB, abaikan chattering VBUS)
 static uint8_t last_usb_state = 0;
 volatile uint8_t vbus_event_pending = 0;
 uint32_t last_usb_check = 0;
@@ -263,7 +264,8 @@ int main(void)
         // Shift register and displays
         UI_Process();
         // ADC & PWM
-        Motor_Process();
+        // DIPINDAH KE SYSTICK INTERRUPT agar tidak terblokir oleh operasi Flashdisk/FatFs
+        // Motor_Process();
 
         // USB VBUS detection (handled by EXTI or periodic poll)
         // Kita boleh cek perubahan VBUS saat idle ATAU saat sedang tersambung
@@ -272,7 +274,8 @@ int main(void)
                 uint8_t new_usb = HAL_GPIO_ReadPin(USB_VBUS_SENSE_GPIO_Port, USB_VBUS_SENSE_Pin);
                 if (HAL_GetTick() < 2000) new_usb = 0; // Ignore VBUS during early boot
                 
-                if (new_usb && !last_usb_state) {
+                if (new_usb && !last_usb_state && usb_function_enabled) {
+                    // VBUS plug terdeteksi DAN USB function aktif
                     usb_sm_tick = HAL_GetTick();
                     usb_sm_state = USB_SM_PLUG_SETTLE;
                 } else if (!new_usb && last_usb_state) {
@@ -284,6 +287,12 @@ int main(void)
                 last_usb_check = HAL_GetTick();
                 vbus_event_pending = 0;
             }
+        }
+
+        // Jika USB function dinonaktifkan saat masih connected → paksa disconnect
+        if (!usb_function_enabled && usb_sm_state == USB_SM_CONN_WAIT) {
+            UART_Print("[USB] Function disabled — forcing disconnect\r\n");
+            usb_sm_state = USB_SM_DISCONN_START;
         }
 
         // USB State Machine (Non-Blocking)
@@ -328,18 +337,70 @@ int main(void)
                 break;
         }
 
-        // Debug UART (100 ms)
+        // Debug UART (100ms)
         uint8_t hour, min, sec, day, date, month, year;
-        if (HAL_GetTick() - last_debug_tick >= 1000) {
+        if (HAL_GetTick() - last_debug_tick >= 100) {
             DS3231_ReadTime(&sec, &min, &hour, &day, &date, &month, &year);
 
-            // DEBUG USB / FILESYSTEM
-            char uart_buf[128];
-            sprintf(uart_buf, "[%02d:%02d:%02d] USB FS: VBUS=%d, Mtd=%d, Fmt=%d, Events=%u, Cap=%lu MB\r\n",
-                    hour, min, sec, 
-                    usb_connected, FS_IsMounted(), FS_IsFormatted(), 
-                    Log_GetEventCount(), 
-                    (unsigned long)(FS_GetFlashCapacity() / 1024 / 1024));
+            char uart_buf[200];
+            CliDebugMode dbg = CLI_GetDebugMode();
+            uint32_t set_val = Motor_GetSetValue();
+            uint32_t pwm = Motor_GetPWMDuty();
+            MotorControlMode mode = Motor_GetMode();
+
+            // Determine whether to show PID or FLASH debug
+            uint8_t show_pid;
+            if (dbg == DEBUG_MODE_PID) {
+                show_pid = 1;
+            } else if (dbg == DEBUG_MODE_FLASH) {
+                show_pid = 0;
+            } else { // DEBUG_MODE_AUTO
+                show_pid = (mode == MOTOR_MODE_DIRECT && pwm > 0) ||
+                           (mode != MOTOR_MODE_DIRECT && set_val > 0);
+            }
+
+            if (show_pid) {
+                if (mode == MOTOR_MODE_DIRECT) {
+                    sprintf(uart_buf, "[%lu] [%02d:%02d:%02d] DIRECT | PWM:%lu Act:%lu P:%lu\r\n",
+                            HAL_GetTick(), hour, min, sec,
+                            (unsigned long)pwm,
+                            (unsigned long)Motor_GetRPM(),
+                            (unsigned long)Motor_GetPulseCount());
+                } else {
+                    float err, integral;
+                    float kp, ki, kd;
+                    Motor_GetPIDState(&err, &integral);
+                    Motor_GetPID(&kp, &ki, &kd);
+
+                    // Convert floats to integer + decimal manually (newlib-nano has no %f)
+                    float mrpm_f = Motor_GetPreciseMotorRPM();
+                    int mrpm_i = (int)mrpm_f;
+                    int mrpm_d = (int)((mrpm_f - (float)mrpm_i) * 10);
+                    if (mrpm_d < 0) mrpm_d = -mrpm_d;
+                    int err_i  = (int)err;   int err_d  = (int)((err  < 0 ? -err  : err)  * 10) % 10;
+                    int int_i  = (int)integral; int int_d = (int)((integral < 0 ? -integral : integral) * 10) % 10;
+                    int kp_i   = (int)kp;   int kp_d   = (int)(kp  * 100) % 100;
+                    int ki_i   = (int)ki;   int ki_d   = (int)(ki  * 100) % 100;
+                    int kd_i   = (int)kd;   int kd_d   = (int)(kd  * 100) % 100;
+
+                    sprintf(uart_buf,
+                            "[%lu] SET:%lu RPM:%lu TRPM:%lu MRPM:%d.%d PWM:%lu ERR:%d.%d INT:%d.%d Kp:%d.%02d Ki:%d.%02d Kd:%d.%02d\r\n",
+                            HAL_GetTick(),
+                            (unsigned long)set_val,
+                            (unsigned long)Motor_GetRPM(),
+                            (unsigned long)(set_val * 25UL),
+                            mrpm_i, mrpm_d,
+                            (unsigned long)pwm,
+                            err_i, err_d, int_i, int_d,
+                            kp_i, kp_d, ki_i, ki_d, kd_i, kd_d);
+                }
+            } else {
+                sprintf(uart_buf, "[%02d:%02d:%02d] USB FS: VBUS=%d, Mtd=%d, Fmt=%d, Events=%u, Cap=%lu MB\r\n",
+                        hour, min, sec,
+                        usb_connected, FS_IsMounted(), FS_IsFormatted(),
+                        Log_GetEventCount(),
+                        (unsigned long)(FS_GetFlashCapacity() / 1024 / 1024));
+            }
             UART_Print(uart_buf);
             last_debug_tick = HAL_GetTick();
         }
@@ -499,7 +560,7 @@ static void MX_TIM4_Init(void)
 
   /* USER CODE END TIM4_Init 1 */
   htim4.Instance = TIM4;
-  htim4.Init.Prescaler = 8399;
+  htim4.Init.Prescaler = 83; // 84MHz / 84 = 1MHz (1us/tick) - SANGAT PENTING untuk resolusi RPM
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim4.Init.Period = 65535;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -517,7 +578,7 @@ static void MX_TIM4_Init(void)
   sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
   sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
   sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
-  sConfigIC.ICFilter = 0;
+  sConfigIC.ICFilter = 15; // Hardware digital filter (max value) untuk membuang EMI/noise PWM
   if (HAL_TIM_IC_ConfigChannel(&htim4, &sConfigIC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();

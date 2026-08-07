@@ -1,5 +1,6 @@
 #include "motor_control.h"
 #include <stdio.h>
+#include <string.h>
 
 extern ADC_HandleTypeDef hadc1;
 extern TIM_HandleTypeDef htim4;
@@ -8,7 +9,8 @@ extern TIM_HandleTypeDef htim5;
 #define BLDC_PULSES_PER_MOTOR_REV  16
 #define GEARBOX_RATIO              25
 #define OUTPUT_PULSES_PER_REV      (BLDC_PULSES_PER_MOTOR_REV * GEARBOX_RATIO) // 400
-#define PULSE_HISTORY_LEN          OUTPUT_PULSES_PER_REV
+// 8 sample: window ~8ms @ 1000 MRPM — cukup untuk respon cepat saat deselerasi
+#define PULSE_HISTORY_LEN          8
 #define PWM_MAX_DUTY               3788
 
 // ================================================================
@@ -16,17 +18,16 @@ extern TIM_HandleTypeDef htim5;
 // ISR hanya MENULIS, Motor_Process MEMBACA dengan critical section
 // Semua volatile agar compiler tidak men-cache nilai lama
 // ================================================================
-static uint32_t isr_interval_buf[PULSE_HISTORY_LEN]; // 400 × 4 = 1600 bytes
+static uint32_t isr_interval_buf[PULSE_HISTORY_LEN]; // 64 × 4 = 256 bytes
 static volatile uint16_t isr_interval_idx    = 0;
 static volatile uint16_t isr_valid_intervals = 0;
 static volatile uint64_t isr_interval_sum    = 0;    // Running sum interval
-static volatile uint32_t isr_outlier_threshold = 0xFFFFFFFFUL; // Diset Motor_Process
 
 static volatile uint32_t rpm = 0;
 static volatile float precise_rpm = 0.0f;
 static volatile uint32_t bldc_pulse_count = 0;
 static uint32_t adc_raw = 0;
-static uint32_t pwm_duty = 0;
+static volatile uint32_t pwm_duty = 0; // volatile: dimodifikasi dari EXTI ISR
 static volatile uint32_t set_value = 0;
 
 // Default PID akan digunakan jika EEPROM kosong
@@ -40,13 +41,17 @@ static float pid_prev_error = 0.0f;
 static uint32_t last_capture_time = 0;
 static volatile uint32_t timer_overflow = 0;
 static uint32_t overflow_count = 0;
-static uint32_t last_extended = 0;
+
+// ================================================================
+// Deferred UART print — aman dipanggil dari EXTI ISR
+// ISR menulis pesan & set flag → Motor_Process() mencetak di main loop
+// ================================================================
+#define DEFERRED_MSG_LEN  80
+static volatile uint8_t deferred_msg_pending = 0;
+static char deferred_msg_buf[DEFERRED_MSG_LEN];
 
 uint32_t Motor_GetRPM(void) {
-    if (HAL_GetTick() - last_capture_time > 500) {
-        rpm = 0;
-        precise_rpm = 0.0f;
-    }
+    // Timeout motor-berhenti di-handle oleh Motor_Process() — getter ini murni read-only
     return rpm;
 }
 
@@ -94,7 +99,7 @@ static MotorControlMode control_mode = MOTOR_MODE_PID;
 void Motor_SetMode(MotorControlMode mode) {
     control_mode = mode;
     // Reset PID state on mode switch to avoid integral windup from previous mode
-    pid_integral = 0.0f;
+    pid_integral   = 0.0f;
     pid_prev_error = 0.0f;
 }
 
@@ -107,7 +112,7 @@ void Motor_Process(void) {
     uint32_t now = HAL_GetTick();
     if (now - last_adc_tick >= 10) {
         float dt = (now - last_adc_tick) / 1000.0f;
-        if (dt <= 0.0f) dt = 0.01f;
+        if (dt <= 0.0f) dt = 0.010f;
 
         // ============================================================
         // Hitung RPM dari ring buffer ISR (critical section)
@@ -132,16 +137,24 @@ void Motor_Process(void) {
             if (vi >= 4) {
                 // Rata-rata interval → Motor RPM → Output RPM
                 float mean_interval = (float)isum / (float)vi;
+
+                // Koreksi Matematis Wajib untuk Tachometer Interval:
+                // Jika waktu menunggu pulsa berikutnya sudah melampaui interval rata-rata sebelumnya,
+                // maka secara matematis motor SUDAH melambat. Kita gunakan waktu tunggu saat ini
+                // sebagai interval (dengan margin 2ms untuk menoleransi jitter timer 1ms).
+                // Ini mencegah RPM 'membeku' di angka tinggi saat motor direm mendadak (PWM=0).
+                float current_wait_us = (float)(HAL_GetTick() - last_capture_time) * 1000.0f;
+                if (current_wait_us > mean_interval + 2000.0f) {
+                    mean_interval = current_wait_us;
+                }
+
                 precise_rpm = 60000000.0f / (mean_interval * BLDC_PULSES_PER_MOTOR_REV);
                 rpm = (uint32_t)(precise_rpm / GEARBOX_RATIO + 0.5f);
-
-                // Update outlier threshold untuk ISR (dijalankan setiap 50ms, bukan di ISR)
-                isr_outlier_threshold = (uint32_t)(mean_interval * 3.0f);
             }
         }
 
         // ADC dibuang (diganti Rotary Encoder)
-        last_adc_tick = now;
+        // (last_adc_tick di-update satu kali di akhir fungsi — baris duplikat dihapus)
 
         if (control_mode == MOTOR_MODE_DIRECT) {
             // =====================================================
@@ -162,45 +175,34 @@ void Motor_Process(void) {
             }
             // Mode CLI: set_value sudah di-set dari luar via Motor_SetCLITarget()
 
-            // PID operates in Motor RPM domain (25x higher resolution)
-            float target_motor_rpm = (float)(set_value * GEARBOX_RATIO);
-            float current_motor_rpm = precise_rpm;
+            // Snapshot set_value satu kali — cegah ISR (rotary encoder) mengubah nilai
+            // di tengah kalkulasi PID sehingga target_motor_rpm dan sdiff selalu konsisten
+            uint32_t sv = set_value;
 
-            // Integral Pre-load: saat target berubah signifikan, isi integral
-            // langsung ke perkiraan nilai yang tepat agar motor tidak merangkak dari 0.
-            // Berdasarkan data motor: PWM ≈ 0.60 × MRPM
-            // Sehingga: integral = (target_motor_rpm × 0.60) / Ki
-            static uint32_t prev_set_value_pid = 0;
-            if (set_value != prev_set_value_pid) {
-                int32_t sdiff = (int32_t)set_value - (int32_t)prev_set_value_pid;
-                if (sdiff > 5 || sdiff < -5) {
-                    // Pre-load integral ke estimasi steady-state
-                    if (pid_ki > 0.001f) {
-                        pid_integral = (target_motor_rpm * 0.60f) / pid_ki;
-                    }
-                    pid_prev_error = 0.0f;
-                }
-                prev_set_value_pid = set_value;
-            }
+            // PID operates in Motor RPM domain (25x higher resolution)
+            float target_motor_rpm = (float)(sv * GEARBOX_RATIO);
+            float current_motor_rpm = precise_rpm;
 
             if (target_motor_rpm < 1.0f) {
                 pwm_duty = 0;
-                pid_integral = 0.0f;
+                pid_integral   = 0.0f;
                 pid_prev_error = 0.0f;
             } else {
                 float error = target_motor_rpm - current_motor_rpm;
 
-                float derivative = (error - pid_prev_error) / dt;
+                float raw_derivative = (error - pid_prev_error) / dt;
                 pid_prev_error = error;
 
                 float p_term = pid_kp * error;
-                float d_term = pid_kd * derivative;
-
+                float d_term = pid_kd * raw_derivative;
                 float i_term_tentative = pid_ki * (pid_integral + error * dt);
 
                 float output = p_term + i_term_tentative + d_term;
 
-                // Anti-windup (Conditional Integration)
+                // Anti-windup Standar Industri (Conditional Integration)
+                // Wajib ada untuk sistem fisik (motor) agar I-term tidak menumpuk saat PWM mentok (0 atau MAX).
+                // Tanpa ini, motor akan tersendat (berhenti lama sebelum jalan lagi) karena 
+                // nilai integral harus "merangkak" naik dari minus yang sangat dalam.
                 if (output >= PWM_MAX_DUTY) {
                     output = PWM_MAX_DUTY;
                     if (error < 0) pid_integral += error * dt;
@@ -217,10 +219,20 @@ void Motor_Process(void) {
 
         __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, pwm_duty);
         last_adc_tick = now;
+
+        // Flush pesan UART yang di-defer dari ISR rotary encoder
+        if (deferred_msg_pending) {
+            char local_buf[DEFERRED_MSG_LEN];
+            __disable_irq();
+            memcpy(local_buf, (const void*)deferred_msg_buf, DEFERRED_MSG_LEN);
+            deferred_msg_pending = 0;
+            __enable_irq();
+            UART_Print(local_buf);
+        }
     }
 }
 
-void Motor_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM4 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3) {
         uint32_t current = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_3);
         uint32_t ovf = overflow_count;
@@ -231,29 +243,32 @@ void Motor_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
         }
 
         uint32_t extended = (ovf * 65536UL) + current;
-        uint32_t delta = extended - last_extended;
+        
+        // NOISE FILTER (Anti-Aliasing Debounce)
+        // Kita butuh 2 variabel statik: waktu edge apapun (termasuk noise), dan waktu pulse valid terakhir.
+        static uint32_t last_raw_edge = 0;
+        static uint32_t last_valid_pulse = 0;
 
-        // ============================================================
-        // ATURAN ISR: TIDAK BOLEH ada float, division, atau operasi lambat!
-        // ISR hanya boleh: integer add/subtract/compare, array write.
-        // Semua komputasi berat (RPM, float) dilakukan di Motor_Process().
-        // ============================================================
+        uint32_t delta_from_raw = extended - last_raw_edge;
+        last_raw_edge = extended; // Selalu update ke edge paling baru
 
-        // Noise filter: buang pulsa yang tidak mungkin secara fisik
-        // Timer 1MHz, max 150 RPM output = 1000 motor pulse/sec = 1000µs/pulse
-        // Threshold 800µs << 1000µs → aman, tidak membuang pulsa valid
-        if (delta < 800) {
-            return;
+        // Threshold 600us (setara maks ~6250 Motor RPM). 
+        // Jika jarak antar edge < 600us, anggap sebagai getaran/noise.
+        // Karena last_raw_edge selalu diupdate, rentetan noise 100us akan TERUS ditolak
+        // dan tidak akan pernah terakumulasi menjadi pulse palsu (mencegah sub-harmonic aliasing).
+        if (delta_from_raw < 600) {
+            return; // Buang noise
         }
 
-        last_extended = extended;
+        // Pulse valid! Hitung delta sesungguhnya dari pulse valid sebelumnya
+        uint32_t delta = extended - last_valid_pulse;
+        last_valid_pulse = extended;
+
         bldc_pulse_count++;
 
-        // Outlier rejection: bandingkan delta dengan threshold
-        if (isr_valid_intervals >= 10 && delta > isr_outlier_threshold) {
-            last_capture_time = HAL_GetTick();
-            return;
-        }
+        // Outlier rejection (berdasarkan threshold) dihapus karena menghalangi 
+        // pembacaan deselerasi ekstrem (saat motor di-rem, delta menjadi sangat besar 
+        // dan salah dianggap sebagai noise, menyebabkan RPM 'membeku' di nilai tinggi).
 
         // Update ring buffer: hanya integer add/subtract (O(1))
         if (isr_valid_intervals == PULSE_HISTORY_LEN) {
@@ -269,7 +284,7 @@ void Motor_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
     }
 }
 
-void Motor_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM4) {
         timer_overflow++;
         overflow_count++;
@@ -279,29 +294,45 @@ void Motor_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 // ROTARY ENCODER API
 // ====================================================
 void Motor_RotaryIncrement(void) {
-    char buf[64];
+    // PENTING: fungsi ini dipanggil dari EXTI ISR!
+    // Dilarang memanggil UART_Print langsung (blocking HAL).
+    // Pesan ditulis ke buffer, Motor_Process() yang mencetak dari main loop.
     if (control_mode == MOTOR_MODE_PID || control_mode == MOTOR_MODE_CLI) {
         if (set_value < 150) set_value++;
-        sprintf(buf, "[ROTARY CW] Mode: PID/CLI, Target RPM: %lu\r\n", (unsigned long)set_value);
-        UART_Print(buf);
+        if (!deferred_msg_pending) {
+            snprintf(deferred_msg_buf, DEFERRED_MSG_LEN,
+                     "[ROTARY CW] Mode: PID/CLI, Target RPM: %lu\r\n", (unsigned long)set_value);
+            deferred_msg_pending = 1;
+        }
     } else if (control_mode == MOTOR_MODE_DIRECT) {
         if (pwm_duty + 10 <= PWM_MAX_DUTY) pwm_duty += 10;
         else pwm_duty = PWM_MAX_DUTY;
-        sprintf(buf, "[ROTARY CW] Mode: DIRECT, PWM: %lu\r\n", (unsigned long)pwm_duty);
-        UART_Print(buf);
+        if (!deferred_msg_pending) {
+            snprintf(deferred_msg_buf, DEFERRED_MSG_LEN,
+                     "[ROTARY CW] Mode: DIRECT, PWM: %lu\r\n", (unsigned long)pwm_duty);
+            deferred_msg_pending = 1;
+        }
     }
 }
 
 void Motor_RotaryDecrement(void) {
-    char buf[64];
+    // PENTING: fungsi ini dipanggil dari EXTI ISR!
+    // Dilarang memanggil UART_Print langsung (blocking HAL).
+    // Pesan ditulis ke buffer, Motor_Process() yang mencetak dari main loop.
     if (control_mode == MOTOR_MODE_PID || control_mode == MOTOR_MODE_CLI) {
         if (set_value > 0) set_value--;
-        sprintf(buf, "[ROTARY CCW] Mode: PID/CLI, Target RPM: %lu\r\n", (unsigned long)set_value);
-        UART_Print(buf);
+        if (!deferred_msg_pending) {
+            snprintf(deferred_msg_buf, DEFERRED_MSG_LEN,
+                     "[ROTARY CCW] Mode: PID/CLI, Target RPM: %lu\r\n", (unsigned long)set_value);
+            deferred_msg_pending = 1;
+        }
     } else if (control_mode == MOTOR_MODE_DIRECT) {
         if (pwm_duty >= 10) pwm_duty -= 10;
         else pwm_duty = 0;
-        sprintf(buf, "[ROTARY CCW] Mode: DIRECT, PWM: %lu\r\n", (unsigned long)pwm_duty);
-        UART_Print(buf);
+        if (!deferred_msg_pending) {
+            snprintf(deferred_msg_buf, DEFERRED_MSG_LEN,
+                     "[ROTARY CCW] Mode: DIRECT, PWM: %lu\r\n", (unsigned long)pwm_duty);
+            deferred_msg_pending = 1;
+        }
     }
 }

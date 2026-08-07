@@ -10,7 +10,15 @@
 #include <stdlib.h>
 
 extern UART_HandleTypeDef huart1;
+extern uint8_t usb_function_enabled; // dikontrol via CLI "USB ON" / "USB OFF"
 extern LaneState_t lanes[5];
+
+/* ==================== Debug Mode ==================== */
+static CliDebugMode debug_mode = DEBUG_MODE_AUTO;
+
+CliDebugMode CLI_GetDebugMode(void) {
+    return debug_mode;
+}
 
 /* ==================== TX Non-blocking Logger ==================== */
 #define UART_BUF_SIZE 4096
@@ -275,6 +283,21 @@ void ProcessUartRxCommand(void) {
             sprintf(msg, "\r\n[CLI] Berhasil: Lane %d, Durasi: %lu ms -> disimpan ke CSV.\r\n", 
                     random_lane + 1, (unsigned long)lanes[random_lane].duration_ms);
             UART_Print(msg);
+        } else if (strcmp(cmd, "DEBUG PID") == 0) {
+            debug_mode = DEBUG_MODE_PID;
+            UART_Print("\r\n[DEBUG] Mode: PID - Menampilkan data motor/PID setiap detik.\r\n");
+        } else if (strcmp(cmd, "DEBUG FLASH") == 0) {
+            debug_mode = DEBUG_MODE_FLASH;
+            UART_Print("\r\n[DEBUG] Mode: FLASH - Menampilkan data USB/Filesystem setiap detik.\r\n");
+        } else if (strcmp(cmd, "DEBUG AUTO") == 0) {
+            debug_mode = DEBUG_MODE_AUTO;
+            UART_Print("\r\n[DEBUG] Mode: AUTO - Otomatis ganti berdasarkan status motor.\r\n");
+        } else if (strcmp(cmd, "USB ON") == 0) {
+            usb_function_enabled = 1;
+            UART_Print("\r\n[USB] Fungsi USB DIAKTIFKAN. Sambungkan kabel USB untuk mounting.\r\n");
+        } else if (strcmp(cmd, "USB OFF") == 0) {
+            usb_function_enabled = 0;
+            UART_Print("\r\n[USB] Fungsi USB DINONAKTIFKAN. Chattering VBUS diabaikan sepenuhnya.\r\n");
         } else if (strcmp(cmd, "HELP") == 0) {
             UART_Print("\r\n=== FTDI Commands ===\r\n"
                        "  MODE PID              : Potensiometer -> Target RPM -> PID\r\n"
@@ -288,6 +311,10 @@ void ProcessUartRxCommand(void) {
                        "  LS                    : Lihat daftar file di dalam flashdisk\r\n"
                        "  FORMAT / FDISK        : Format seluruh flash disk\r\n"
                        "  CHECKFS               : Verifikasi partisi flash disk\r\n"
+                       "  USB ON / OFF          : Aktifkan/Matikan fungsi USB (atasi chattering VBUS)\r\n"
+                       "  DEBUG PID             : Debug tampilkan data motor/PID\r\n"
+                       "  DEBUG FLASH           : Debug tampilkan data USB/Filesystem\r\n"
+                       "  DEBUG AUTO            : Debug otomatis (default)\r\n"
                        "  HELP                  : Tampilkan daftar perintah\r\n");
         } else {
             char err[64];

@@ -51,7 +51,7 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+extern void Motor_Process(void);
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -188,7 +188,7 @@ void SysTick_Handler(void)
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
-
+  Motor_Process();
   /* USER CODE END SysTick_IRQn 1 */
 }
 

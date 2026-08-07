@@ -31,9 +31,7 @@ void Motor_GetPIDState(float *error, float *integral);
 // Call periodically in main loop (e.g. every tick, it handles its own 50ms interval)
 void Motor_Process(void);
 
-// TIM Callbacks (to be called from stm32f4xx_it.c or HAL callbacks in main.c)
-void Motor_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);
-void Motor_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
+// TIM Callbacks are now standard HAL callbacks
 
 // Add an event from the UI button (simulate fall)
 void Motor_ForceRPMReset(void);

@@ -9,4 +9,4 @@
 ../USB_DEVICE/App/usbd_storage_if.c:358:6:STORAGE_UpdateCapacity	16	static
 ../USB_DEVICE/App/usbd_storage_if.c:364:6:STORAGE_SetPartitionOffset	16	static
 ../USB_DEVICE/App/usbd_storage_if.c:369:6:STORAGE_Flush	16	static
-../USB_DEVICE/App/usbd_storage_if.c:385:6:STORAGE_Invalidate	4	static
+../USB_DEVICE/App/usbd_storage_if.c:371:6:STORAGE_Invalidate	4	static

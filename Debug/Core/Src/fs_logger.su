@@ -6,10 +6,10 @@
 ../Core/Src/fs_logger.c:50:6:MountFS	64	static
 ../Core/Src/fs_logger.c:67:16:VerifyBootSector	568	static
 ../Core/Src/fs_logger.c:81:6:FormatFS	696	static
-../Core/Src/fs_logger.c:148:6:CheckAndFormatIfMismatch	640	static
-../Core/Src/fs_logger.c:188:6:Log_Init	4	static
-../Core/Src/fs_logger.c:193:6:Log_AddEvent	192	static
-../Core/Src/fs_logger.c:212:6:Log_FlushToCSV	160	static
-../Core/Src/fs_logger.c:247:6:Log_StageEvents	160	static
-../Core/Src/fs_logger.c:269:6:Log_ReadCSV	272	static
-../Core/Src/fs_logger.c:285:10:Log_GetEventCount	4	static
+../Core/Src/fs_logger.c:138:6:CheckAndFormatIfMismatch	640	static
+../Core/Src/fs_logger.c:178:6:Log_Init	4	static
+../Core/Src/fs_logger.c:183:6:Log_AddEvent	192	static
+../Core/Src/fs_logger.c:202:6:Log_FlushToCSV	160	static
+../Core/Src/fs_logger.c:237:6:Log_StageEvents	160	static
+../Core/Src/fs_logger.c:259:6:Log_ReadCSV	272	static
+../Core/Src/fs_logger.c:275:10:Log_GetEventCount	4	static

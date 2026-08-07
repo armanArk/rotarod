@@ -1,6 +1,7 @@
-../Core/Src/cli.c:24:6:UART_Print	4
-../Core/Src/cli.c:39:13:uart_start_tx_if_needed	4
-../Core/Src/cli.c:47:6:HAL_UART_TxCpltCallback	2
-../Core/Src/cli.c:66:14:my_atof	9
-../Core/Src/cli.c:80:6:USART1_Rx_ISR	8
-../Core/Src/cli.c:99:6:ProcessUartRxCommand	52
+../Core/Src/cli.c:19:14:CLI_GetDebugMode	1
+../Core/Src/cli.c:32:6:UART_Print	4
+../Core/Src/cli.c:47:13:uart_start_tx_if_needed	4
+../Core/Src/cli.c:55:6:HAL_UART_TxCpltCallback	2
+../Core/Src/cli.c:74:14:my_atof	9
+../Core/Src/cli.c:88:6:USART1_Rx_ISR	8
+../Core/Src/cli.c:107:6:ProcessUartRxCommand	57
