@@ -174,11 +174,11 @@ int main(void)
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Pin = DISP_CLK2_Pin | DISP_CLK3_Pin | DISP_CLK4_Pin;
+    GPIO_InitStruct.Pin = DISP_CLK2_Pin | DISP_CLK3_Pin | DISP_CLK4_Pin | DISP_CLK7_Pin;
     HAL_GPIO_Init(DISP_CLK2_GPIO_Port, &GPIO_InitStruct);
     GPIO_InitStruct.Pin = DISP_CLK1_Pin | DISP_CLK5_Pin | DISP_CLK6_Pin;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-    HAL_GPIO_WritePin(GPIOB, DISP_CLK2_Pin | DISP_CLK3_Pin | DISP_CLK4_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, DISP_CLK2_Pin | DISP_CLK3_Pin | DISP_CLK4_Pin | DISP_CLK7_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(GPIOC, DISP_CLK1_Pin | DISP_CLK5_Pin | DISP_CLK6_Pin, GPIO_PIN_SET);
 
     // Displays are initialized via UI_Init() later
@@ -223,6 +223,10 @@ int main(void)
 
     // Initialize staging area for queued writes while USB attached
     if (staging_init() == 0) UART_Print("Staging initialized\r\n");
+    if (staging_has_entries()) {
+        staging_commit();
+        UART_Print("Staged events committed to flash at boot\r\n");
+    }
 
     // Independent watchdog: simple register-based init (avoids HAL IWDG dependency)
     Simple_IWDG_Init();
@@ -349,17 +353,30 @@ int main(void)
             MotorControlMode mode = Motor_GetMode();
 
             // Determine whether to show PID or FLASH debug
-            uint8_t show_pid;
-            if (dbg == DEBUG_MODE_PID) {
-                show_pid = 1;
-            } else if (dbg == DEBUG_MODE_FLASH) {
-                show_pid = 0;
-            } else { // DEBUG_MODE_AUTO
-                show_pid = (mode == MOTOR_MODE_DIRECT && pwm > 0) ||
-                           (mode != MOTOR_MODE_DIRECT && set_val > 0);
-            }
+            if (dbg == DEBUG_MODE_SHIFTR) {
+                uint8_t sr[4] = {0};
+                UI_GetShiftRegStatus(sr);
+                char b[4][9];
+                for(int i = 0; i < 4; i++) {
+                    for(int j = 0; j < 8; j++) {
+                        b[i][7 - j] = (sr[i] & (1 << j)) ? '1' : '0';
+                    }
+                    b[i][8] = '\0';
+                }
+                sprintf(uart_buf, "[%02d:%02d:%02d] SHIFTR ICA:%s ICB:%s ICC:%s ICD:%s\r\n", 
+                        hour, min, sec, b[0], b[1], b[2], b[3]);
+            } else {
+                uint8_t show_pid;
+                if (dbg == DEBUG_MODE_PID) {
+                    show_pid = 1;
+                } else if (dbg == DEBUG_MODE_FLASH) {
+                    show_pid = 0;
+                } else { // DEBUG_MODE_AUTO
+                    show_pid = (mode == MOTOR_MODE_DIRECT && pwm > 0) ||
+                               (mode != MOTOR_MODE_DIRECT && set_val > 0);
+                }
 
-            if (show_pid) {
+                if (show_pid) {
                 if (mode == MOTOR_MODE_DIRECT) {
                     sprintf(uart_buf, "[%lu] [%02d:%02d:%02d] DIRECT | PWM:%lu Act:%lu P:%lu\r\n",
                             HAL_GetTick(), hour, min, sec,
@@ -394,12 +411,13 @@ int main(void)
                             err_i, err_d, int_i, int_d,
                             kp_i, kp_d, ki_i, ki_d, kd_i, kd_d);
                 }
-            } else {
-                sprintf(uart_buf, "[%02d:%02d:%02d] USB FS: VBUS=%d, Mtd=%d, Fmt=%d, Events=%u, Cap=%lu MB\r\n",
-                        hour, min, sec,
-                        usb_connected, FS_IsMounted(), FS_IsFormatted(),
-                        Log_GetEventCount(),
-                        (unsigned long)(FS_GetFlashCapacity() / 1024 / 1024));
+                } else {
+                    sprintf(uart_buf, "[%02d:%02d:%02d] USB FS: VBUS=%d, Mtd=%d, Fmt=%d, Events=%u, Cap=%lu MB\r\n",
+                            hour, min, sec,
+                            usb_connected, FS_IsMounted(), FS_IsFormatted(),
+                            Log_GetEventCount(),
+                            (unsigned long)(FS_GetFlashCapacity() / 1024 / 1024));
+                }
             }
             UART_Print(uart_buf);
             last_debug_tick = HAL_GetTick();
@@ -698,7 +716,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, DISP_DIO1_Pin|DISP_DIO2_Pin|DISP_DIO3_Pin|DISP_DIO7_Pin
                           |DISP_DIO5_Pin|DISP_DIO6_Pin|DISP_CLK3_Pin|DISP_CLK4_Pin
-                          |DISP_CLK2_Pin|DISP_DIO4_Pin|FLASH_CS_Pin, GPIO_PIN_RESET);
+                          |DISP_CLK2_Pin|DISP_CLK7_Pin|DISP_DIO4_Pin|FLASH_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : DISP_CLK1_Pin DISP_CLK5_Pin DISP_CLK6_Pin */
   GPIO_InitStruct.Pin = DISP_CLK1_Pin|DISP_CLK5_Pin|DISP_CLK6_Pin;
@@ -716,10 +734,10 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : DISP_DIO1_Pin DISP_DIO2_Pin DISP_DIO3_Pin DISP_DIO7_Pin
                            DISP_DIO5_Pin DISP_DIO6_Pin DISP_CLK3_Pin DISP_CLK4_Pin
-                           DISP_CLK2_Pin DISP_DIO4_Pin FLASH_CS_Pin */
+                           DISP_CLK2_Pin DISP_CLK7_Pin DISP_DIO4_Pin FLASH_CS_Pin */
   GPIO_InitStruct.Pin = DISP_DIO1_Pin|DISP_DIO2_Pin|DISP_DIO3_Pin|DISP_DIO7_Pin
                           |DISP_DIO5_Pin|DISP_DIO6_Pin|DISP_CLK3_Pin|DISP_CLK4_Pin
-                          |DISP_CLK2_Pin|DISP_DIO4_Pin|FLASH_CS_Pin;
+                          |DISP_CLK2_Pin|DISP_CLK7_Pin|DISP_DIO4_Pin|FLASH_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -731,11 +749,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : DISP_CLK7_Pin */
-  GPIO_InitStruct.Pin = DISP_CLK7_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(DISP_CLK7_GPIO_Port, &GPIO_InitStruct);
+  /* DISP_CLK7_Pin configuration removed here (merged above) */
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
