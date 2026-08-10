@@ -1,4 +1,4 @@
-﻿/* USER CODE BEGIN Header */
+/* USER CODE BEGIN Header */
 /**
   ******************************************************************************
   * @file           : usbd_storage_if.c
@@ -241,7 +241,7 @@ int8_t STORAGE_IsWriteProtected_FS(uint8_t lun)
   /* USER CODE BEGIN 5 */
   UNUSED(lun);
 
-  return 0;  // 0 = Not Write Protected (Read/Write enabled)
+  return 1;  // 1 = Write Protected (Read-Only)
   /* USER CODE END 5 */
 }
 
