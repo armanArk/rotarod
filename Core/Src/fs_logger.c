@@ -210,16 +210,17 @@ void Log_FlushToCSV(void) {
     fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
     if (fr == FR_OK) {
         if (f_size(&csv_file) == 0) {
-            char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (ms),RPM,Lane\r\n";
+            char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
             f_write(&csv_file, header, strlen(header), &bw);
             csv_header_written = 1;
             UART_Print("CSV header written\r\n");
         }
         for (int i = 0; i < event_count; i++) {
             char line[128];
-            int len = sprintf(line, "%s,%lu,%u,%u\r\n", 
+            int len = sprintf(line, "%s,%lu.%03lu,%u,%u\r\n", 
                               event_queue[i].timestamp, 
-                              (unsigned long)event_queue[i].duration_ms, 
+                              (unsigned long)(event_queue[i].duration_ms / 1000), 
+                              (unsigned long)(event_queue[i].duration_ms % 1000), 
                               event_queue[i].rpm, 
                               event_queue[i].lane);
             f_write(&csv_file, line, len, &bw);
@@ -238,7 +239,7 @@ void Log_StageEvents(void) {
     if (event_count == 0) { UART_Print("No events to stage.\r\n"); return; }
     
     if (!csv_header_written) {
-        const char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (ms),RPM,Lane\r\n";
+        const char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
         staging_append((const uint8_t*)header, (uint32_t)strlen(header));
         csv_header_written = 1;
         UART_Print("CSV header staged\r\n");
@@ -246,7 +247,12 @@ void Log_StageEvents(void) {
 
     for (int i = 0; i < event_count; i++) {
         char line[128];
-        int len = sprintf(line, "%s,%lu,%u,%u\r\n", event_queue[i].timestamp, (unsigned long)event_queue[i].duration_ms, event_queue[i].rpm, event_queue[i].lane);
+        int len = sprintf(line, "%s,%lu.%03lu,%u,%u\r\n", 
+                          event_queue[i].timestamp, 
+                          (unsigned long)(event_queue[i].duration_ms / 1000), 
+                          (unsigned long)(event_queue[i].duration_ms % 1000), 
+                          event_queue[i].rpm, 
+                          event_queue[i].lane);
         if (staging_append((const uint8_t*)line, (uint32_t)len) != 0) {
             UART_Print("Staging append failed\r\n");
             return;
