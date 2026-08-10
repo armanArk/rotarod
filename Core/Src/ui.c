@@ -138,7 +138,7 @@ void UI_Process(void) {
                 lanes[i].duration_ms = HAL_GetTick() - lanes[i].start_tick;
                 
                 if (fall_detected) {
-                    Log_AddEvent(lanes[i].duration_ms, Motor_GetRPM(), i + 1);
+                    Log_AddEvent(lanes[i].duration_ms, Motor_GetSetValue(), i + 1);
                     lanes[i].last_magnet_tick = HAL_GetTick();
                 }
             }
@@ -211,7 +211,7 @@ bool UI_TriggerFall(uint8_t lane_index) {
         lanes[lane_index].duration_ms = 1000 + (rand() % 5000); 
     }
     
-    Log_AddEvent(lanes[lane_index].duration_ms, Motor_GetRPM(), lane_index + 1);
+    Log_AddEvent(lanes[lane_index].duration_ms, Motor_GetSetValue(), lane_index + 1);
     lanes[lane_index].last_magnet_tick = HAL_GetTick();
     return true;
 }
@@ -235,4 +235,13 @@ bool UI_StopLane(uint8_t lane_index) {
         return true;
     }
     return false;
+}
+
+// Returns the last-read raw byte from each of the 4 HC165 ICs.
+// ICA = IC0 (pins 0-7), ICB = IC1 (8-15), ICC = IC2 (16-23), ICD = IC3 (24-31)
+void UI_GetShiftRegStatus(uint8_t dst[4]) {
+    dst[0] = status_tombol[0];
+    dst[1] = status_tombol[1];
+    dst[2] = status_tombol[2];
+    dst[3] = status_tombol[3];
 }
