@@ -341,13 +341,15 @@ int main(void)
                 break;
         }
 
-        // Debug UART (100ms)
+        // Debug UART
         uint8_t hour, min, sec, day, date, month, year;
-        if (HAL_GetTick() - last_debug_tick >= 100) {
+        CliDebugMode dbg = CLI_GetDebugMode();
+        uint32_t debug_interval = (dbg == DEBUG_MODE_SHIFTR) ? 20 : 100; // Percepat khusus untuk pantau Shift Register
+
+        if (HAL_GetTick() - last_debug_tick >= debug_interval) {
             DS3231_ReadTime(&sec, &min, &hour, &day, &date, &month, &year);
 
             char uart_buf[200];
-            CliDebugMode dbg = CLI_GetDebugMode();
             uint32_t set_val = Motor_GetSetValue();
             uint32_t pwm = Motor_GetPWMDuty();
             MotorControlMode mode = Motor_GetMode();
@@ -363,8 +365,9 @@ int main(void)
                     }
                     b[i][8] = '\0';
                 }
-                sprintf(uart_buf, "[%02d:%02d:%02d] SHIFTR ICA:%s ICB:%s ICC:%s ICD:%s\r\n", 
-                        hour, min, sec, b[0], b[1], b[2], b[3]);
+                // Hapus cetak jam agar tidak memenuhi buffer UART, fokus pada bit
+                sprintf(uart_buf, "[%lu] SHIFTR ICA:%s ICB:%s ICC:%s ICD:%s\r\n", 
+                        HAL_GetTick(), b[0], b[1], b[2], b[3]);
             } else {
                 uint8_t show_pid;
                 if (dbg == DEBUG_MODE_PID) {

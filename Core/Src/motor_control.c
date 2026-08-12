@@ -7,8 +7,10 @@ extern TIM_HandleTypeDef htim4;
 extern TIM_HandleTypeDef htim5;
 
 #define BLDC_PULSES_PER_MOTOR_REV  16
-#define GEARBOX_RATIO              25
-#define OUTPUT_PULSES_PER_REV      (BLDC_PULSES_PER_MOTOR_REV * GEARBOX_RATIO) // 400
+// Kalibrasi Fisik: Pada rasio 25, 10 RPM membutuhkan 55.96 detik (seharusnya 60 detik).
+// Rasio Aktual = 25.0 * (55.96 / 60.0) = 23.3166...
+#define GEARBOX_RATIO              23.3167f
+#define OUTPUT_PULSES_PER_REV      (BLDC_PULSES_PER_MOTOR_REV * GEARBOX_RATIO)
 // 8 sample: window ~8ms @ 1000 MRPM — cukup untuk respon cepat saat deselerasi
 #define PULSE_HISTORY_LEN          8
 #define PWM_MAX_DUTY               3788
@@ -39,6 +41,7 @@ static float pid_prev_error = 0.0f;
 
 
 static uint32_t last_capture_time = 0;
+static volatile uint32_t last_valid_pulse_time = 0;
 static volatile uint32_t timer_overflow = 0;
 static uint32_t overflow_count = 0;
 
@@ -110,9 +113,9 @@ MotorControlMode Motor_GetMode(void) {
 void Motor_Process(void) {
     static uint32_t last_adc_tick = 0;
     uint32_t now = HAL_GetTick();
-    if (now - last_adc_tick >= 10) {
+    if (now - last_adc_tick >= 2) {
         float dt = (now - last_adc_tick) / 1000.0f;
-        if (dt <= 0.0f) dt = 0.010f;
+        if (dt <= 0.0f) dt = 0.002f;
 
         // ============================================================
         // Hitung RPM dari ring buffer ISR (critical section)
@@ -142,10 +145,17 @@ void Motor_Process(void) {
                 // Jika waktu menunggu pulsa berikutnya sudah melampaui interval rata-rata sebelumnya,
                 // maka secara matematis motor SUDAH melambat. Kita gunakan waktu tunggu saat ini
                 // sebagai interval (dengan margin 2ms untuk menoleransi jitter timer 1ms).
-                // Ini mencegah RPM 'membeku' di angka tinggi saat motor direm mendadak (PWM=0).
-                float current_wait_us = (float)(HAL_GetTick() - last_capture_time) * 1000.0f;
-                if (current_wait_us > mean_interval + 2000.0f) {
-                    mean_interval = current_wait_us;
+                // Ini mencegah RPM 'membeku' saat motor direm mendadak (PWM=0).
+                uint32_t current_tim4 = __HAL_TIM_GET_COUNTER(&htim4);
+                uint32_t extended_now = (timer_overflow * 65536UL) + current_tim4;
+                // Cegah race condition overflow
+                if (__HAL_TIM_GET_FLAG(&htim4, TIM_FLAG_UPDATE) != RESET && current_tim4 < 32768) {
+                    extended_now += 65536UL;
+                }
+                
+                uint32_t current_wait_us = extended_now - last_valid_pulse_time;
+                if ((float)current_wait_us > mean_interval + 2000.0f) {
+                    mean_interval = (float)current_wait_us;
                 }
 
                 precise_rpm = 60000000.0f / (mean_interval * BLDC_PULSES_PER_MOTOR_REV);
@@ -192,9 +202,15 @@ void Motor_Process(void) {
 
                 float raw_derivative = (error - pid_prev_error) / dt;
                 pid_prev_error = error;
+                
+                // Low-pass filter (IIR) untuk Derivative
+                // Sangat penting pada update rate tinggi (500Hz) agar Kd tidak bereaksi brutal 
+                // terhadap jitter mekanis sekecil apapun dari sensor.
+                static float filtered_derivative = 0.0f;
+                filtered_derivative = 0.1f * raw_derivative + 0.9f * filtered_derivative;
 
                 float p_term = pid_kp * error;
-                float d_term = pid_kd * raw_derivative;
+                float d_term = pid_kd * filtered_derivative;
                 float i_term_tentative = pid_ki * (pid_integral + error * dt);
 
                 float output = p_term + i_term_tentative + d_term;
@@ -247,7 +263,6 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
         // NOISE FILTER (Anti-Aliasing Debounce)
         // Kita butuh 2 variabel statik: waktu edge apapun (termasuk noise), dan waktu pulse valid terakhir.
         static uint32_t last_raw_edge = 0;
-        static uint32_t last_valid_pulse = 0;
 
         uint32_t delta_from_raw = extended - last_raw_edge;
         last_raw_edge = extended; // Selalu update ke edge paling baru
@@ -261,8 +276,8 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
         }
 
         // Pulse valid! Hitung delta sesungguhnya dari pulse valid sebelumnya
-        uint32_t delta = extended - last_valid_pulse;
-        last_valid_pulse = extended;
+        uint32_t delta = extended - last_valid_pulse_time;
+        last_valid_pulse_time = extended;
 
         bldc_pulse_count++;
 

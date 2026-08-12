@@ -289,6 +289,9 @@ void ProcessUartRxCommand(void) {
         } else if (strcmp(cmd, "DEBUG FLASH") == 0) {
             debug_mode = DEBUG_MODE_FLASH;
             UART_Print("\r\n[DEBUG] Mode: FLASH - Menampilkan data USB/Filesystem setiap detik.\r\n");
+        } else if (strcmp(cmd, "DEBUG SHIFTR") == 0) {
+            debug_mode = DEBUG_MODE_SHIFTR;
+            UART_Print("\r\n[DEBUG] Mode: SHIFTR - Menampilkan data Shift Register (4 IC) dalam biner.\r\n");
         } else if (strcmp(cmd, "DEBUG AUTO") == 0) {
             debug_mode = DEBUG_MODE_AUTO;
             UART_Print("\r\n[DEBUG] Mode: AUTO - Otomatis ganti berdasarkan status motor.\r\n");
@@ -314,6 +317,7 @@ void ProcessUartRxCommand(void) {
                        "  USB ON / OFF          : Aktifkan/Matikan fungsi USB (atasi chattering VBUS)\r\n"
                        "  DEBUG PID             : Debug tampilkan data motor/PID\r\n"
                        "  DEBUG FLASH           : Debug tampilkan data USB/Filesystem\r\n"
+                       "  DEBUG SHIFTR          : Debug tampilkan data Shift Register\r\n"
                        "  DEBUG AUTO            : Debug otomatis (default)\r\n"
                        "  HELP                  : Tampilkan daftar perintah\r\n");
         } else {

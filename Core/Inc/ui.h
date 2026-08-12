@@ -35,4 +35,7 @@ bool UI_TriggerFall(uint8_t lane_index);
 bool UI_StartLane(uint8_t lane_index);
 bool UI_StopLane(uint8_t lane_index);
 
+// Copy raw shift register bytes (4 ICs) into dst[0..3]
+void UI_GetShiftRegStatus(uint8_t dst[4]);
+
 #endif // UI_H

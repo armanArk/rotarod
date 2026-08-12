@@ -9,7 +9,7 @@
 #define HC165_TOTAL_PINS    (HC165_NUM_CHIPS * 8)
 #define NUM_DISPLAYS        7
 #define DISPLAY_UPDATE_MS   100
-#define BUTTON_READ_MS      20
+#define BUTTON_READ_MS      5
 #define FALL_DEBOUNCE_MS    500
 
 static uint8_t status_tombol[HC165_NUM_CHIPS], pins[HC165_TOTAL_PINS];
@@ -93,11 +93,11 @@ void UI_Process(void) {
             uint8_t cable_det = pins[map_detect[i]]; // LOW (0) = connected
             uint8_t ext_btn   = pins[map_ext[i]];
 
-            uint8_t start_edge = (btn_start && !lanes[i].prev_btn_start);
-            uint8_t stop_edge  = (btn_stop && !lanes[i].prev_btn_stop);
-            uint8_t ext_edge   = (ext_btn && !lanes[i].prev_ext_btn);
-            uint8_t reset_edge = (btn_reset && !lanes[i].prev_btn_reset);
-            uint8_t magnet_edge= (magnet && !lanes[i].prev_magnet);
+            uint8_t start_edge = (!btn_start && lanes[i].prev_btn_start);
+            uint8_t stop_edge  = (!btn_stop && lanes[i].prev_btn_stop);
+            uint8_t ext_edge   = (!ext_btn && lanes[i].prev_ext_btn);
+            uint8_t reset_edge = (!btn_reset && lanes[i].prev_btn_reset);
+            uint8_t magnet_edge= (!magnet && lanes[i].prev_magnet);
 
             lanes[i].prev_btn_start = btn_start;
             lanes[i].prev_btn_stop  = btn_stop;
@@ -137,16 +137,23 @@ void UI_Process(void) {
                 lanes[i].status = LANE_STOPPED;
                 lanes[i].duration_ms = HAL_GetTick() - lanes[i].start_tick;
                 
+                // [PRAKTEK IDEAL]: Catat ke log baik karena magnet jatuh maupun Stop manual (e.g. passive rotation)
+                Log_AddEvent(lanes[i].duration_ms, Motor_GetSetValue(), i + 1);
+                
                 if (fall_detected) {
-                    Log_AddEvent(lanes[i].duration_ms, Motor_GetSetValue(), i + 1);
                     lanes[i].last_magnet_tick = HAL_GetTick();
                 }
             }
 
-            // Execute Reset (only if not running)
-            if (reset_edge && lanes[i].status != LANE_RUNNING) {
+            // Execute Reset (hanya dieksekusi 1x tepat saat tombol ditekan / falling edge)
+            if (reset_edge) {
+                char dbgbuf[40];
+                sprintf(dbgbuf, ">>> RESET PRESSED LANE %d <<<\r\n", i);
+                UART_Print(dbgbuf);
+
                 lanes[i].status = LANE_IDLE;
                 lanes[i].duration_ms = 0;
+                Display_ShowNumber(i, 0, 2); // Update layar 1x secara instan
             }
         } // End of for loop
     } // End of if (hc165_en)

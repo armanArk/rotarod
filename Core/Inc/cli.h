@@ -8,6 +8,7 @@ typedef enum {
     DEBUG_MODE_AUTO  = 0,  // Auto: PID when motor active, FLASH otherwise
     DEBUG_MODE_PID   = 1,  // Always show PID/motor debug
     DEBUG_MODE_FLASH = 2,  // Always show USB/flash debug
+    DEBUG_MODE_SHIFTR= 3,  // Always show Shift Register states
 } CliDebugMode;
 
 // Non-blocking UART print
