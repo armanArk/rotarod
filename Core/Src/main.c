@@ -314,6 +314,7 @@ int main(void)
                 
             case USB_SM_CONN_START:
                 UART_Print("USB connected - exposing flash\r\n");
+                UnmountAllFS(); // Lepas FS dari internal STM32 agar Windows punya akses eksklusif
                 HAL_PCD_DevConnect(&hpcd_USB_OTG_FS); // Symmetrical: DevDisconnect is called on disconnect
                 STORAGE_UpdateCapacity(FS_GetFlashCapacity());
                 STORAGE_SetPartitionOffset(0);
@@ -335,7 +336,8 @@ int main(void)
             case USB_SM_DISCONN_WAIT:
                 if (HAL_GetTick() - usb_sm_tick >= 100) { // Pengganti HAL_Delay(100)
                     STORAGE_Invalidate();
-                    staging_commit(); 
+                    MountFS(); // Pasang kembali FS ke internal STM32
+                    staging_commit(); // Pindahkan data dari EEPROM ke Flash
                     usb_sm_state = USB_SM_IDLE;
                 }
                 break;
