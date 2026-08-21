@@ -30,6 +30,7 @@ typedef struct {
 // Event Logging
 void Log_AddEvent(uint32_t duration_ms, uint16_t rpm_val, uint8_t lane);
 void Log_FlushToCSV(void);
+void Log_ClearCSV(void);
 void Log_StageEvents(void);
 void Log_ReadCSV(void);
 

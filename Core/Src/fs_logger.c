@@ -235,6 +235,33 @@ void Log_FlushToCSV(void) {
     }
 }
 
+void Log_ClearCSV(void) {
+    if (!fs_mounted) {
+        UART_Print("FS not mounted, cannot clear CSV. Please disconnect USB.\r\n");
+        return;
+    }
+    
+    // Open with FA_CREATE_ALWAYS to truncate the file to 0 bytes
+    fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
+    if (fr == FR_OK) {
+        char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
+        f_write(&csv_file, header, strlen(header), &bw);
+        f_close(&csv_file);
+        
+        csv_header_written = 1;
+        event_count = 0;
+        
+        // Also clear EEPROM staging so no old events are restored
+        staging_clear();
+        
+        UART_Print("CSV data cleared successfully.\r\n");
+    } else {
+        char msg[32]; 
+        sprintf(msg, "CSV clear err: %d\r\n", fr); 
+        UART_Print(msg);
+    }
+}
+
 void Log_StageEvents(void) {
     if (event_count == 0) { UART_Print("No events to stage.\r\n"); return; }
     

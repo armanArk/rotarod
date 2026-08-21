@@ -128,3 +128,10 @@ int staging_commit(void) {
     return 0;
 }
 
+void staging_clear(void) {
+    s_count = 0;
+    if (EEPROM_IsReady()) {
+        uint8_t count = 0;
+        EEPROM_Write(ADDR_COUNT, &count, 1);
+    }
+}

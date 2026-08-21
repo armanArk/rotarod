@@ -128,6 +128,10 @@ void ProcessUartRxCommand(void) {
             UART_Print("\r\n[FTDI Command] Formatting flash disk...\r\n");
             UnmountAllFS();
             FormatFS();
+        } else if (strcmp(cmd, "CLEARDATA") == 0) {
+            UART_Print("\r\n[FTDI Command] Clearing CSV data...\r\n");
+            extern void Log_ClearCSV(void);
+            Log_ClearCSV();
         } else if (strcmp(cmd, "CHECKFS") == 0) {
             UART_Print("\r\n[FTDI Command] Checking FS size...\r\n");
             CheckAndFormatIfMismatch();
@@ -314,6 +318,8 @@ void ProcessUartRxCommand(void) {
                        "  LS                    : Lihat daftar file di dalam flashdisk\r\n"
                        "  FORMAT / FDISK        : Format seluruh flash disk\r\n"
                        "  CHECKFS               : Verifikasi partisi flash disk\r\n"
+                       "  CLEARDATA             : Hapus semua data di CSV (header tetap ada)\r\n"
+                       "  DEBUG <MODE>          : Atur mode debug (AUTO, SHIFTR, PID, FLASH)\r\n"
                        "  USB ON / OFF          : Aktifkan/Matikan fungsi USB (atasi chattering VBUS)\r\n"
                        "  DEBUG PID             : Debug tampilkan data motor/PID\r\n"
                        "  DEBUG FLASH           : Debug tampilkan data USB/Filesystem\r\n"
