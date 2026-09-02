@@ -209,7 +209,7 @@ void Log_FlushToCSV(void) {
     fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
     if (fr == FR_OK) {
         if (f_size(&csv_file) == 0) {
-            char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
+            char header[] = "sep=,\r\nDate (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
             f_write(&csv_file, header, strlen(header), &bw);
             csv_header_written = 1;
             UART_Print("CSV header written\r\n");
@@ -243,7 +243,7 @@ void Log_ClearCSV(void) {
     // Open with FA_CREATE_ALWAYS to truncate the file to 0 bytes
     fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_CREATE_ALWAYS);
     if (fr == FR_OK) {
-        char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
+        char header[] = "sep=,\r\nDate (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
         f_write(&csv_file, header, strlen(header), &bw);
         f_close(&csv_file);
         
@@ -265,7 +265,7 @@ void Log_StageEvents(void) {
     if (event_count == 0) { UART_Print("No events to stage.\r\n"); return; }
     
     if (!csv_header_written) {
-        const char header[] = "Date (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
+        const char header[] = "sep=,\r\nDate (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
         staging_append((const uint8_t*)header, (uint32_t)strlen(header));
         csv_header_written = 1;
         UART_Print("CSV header staged\r\n");
