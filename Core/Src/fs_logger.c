@@ -205,10 +205,12 @@ void Log_FlushToCSV(void) {
         Log_StageEvents();
         return;
     }
-
+    
     fr = f_open(&csv_file, "ROTAROD.CSV", FA_WRITE | FA_OPEN_APPEND);
     if (fr == FR_OK) {
         if (f_size(&csv_file) == 0) {
+            // Trik sep=, memaksa Microsoft Excel di SEMUA negara/region 
+            // untuk menggunakan Koma sebagai pemisah, tanpa perlu setting manual.
             char header[] = "sep=,\r\nDate (DD/MM/YY),Time (HH:MM:SS),Duration (s),RPM,Lane\r\n";
             f_write(&csv_file, header, strlen(header), &bw);
             csv_header_written = 1;
