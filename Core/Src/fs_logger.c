@@ -186,10 +186,9 @@ void Log_AddEvent(uint32_t duration_ms, uint16_t rpm_val, uint8_t lane) {
     
     uint8_t sec, min, hour, day, date, month, year;
     DS3231_ReadTime(&sec, &min, &hour, &day, &date, &month, &year);
-    // TRICK: Separate date and time with a comma so they fall into two different columns
-    // TRICK 2: Wrap the date in ="..." to force Excel to read it as TEXT so it never shows #######
-    // TRICK 3: Shorten date to DD/MM/YY (8 characters) so it fits perfectly inside Excel's default 8.43 column width!
-    sprintf(ev->timestamp, "=\"%02d/%02d/%02d\",%02d:%02d:%02d", date, month, year, hour, min, sec);
+    // Simpan tanggal dan waktu secara polos (tanpa trik ="" untuk Excel) 
+    // agar kompatibel dengan WPS Office, LibreOffice, atau versi Excel lainnya.
+    sprintf(ev->timestamp, "%02d/%02d/%02d,%02d:%02d:%02d", date, month, year, hour, min, sec);
     
     ev->duration_ms = duration_ms;
     ev->rpm = rpm_val;
