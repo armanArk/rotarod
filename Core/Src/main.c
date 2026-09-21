@@ -246,7 +246,8 @@ int main(void)
         MotorSettings saved;
         if (Settings_Load(&saved)) {
             Motor_SetPID(saved.kp, saved.ki, saved.kd);
-            UART_Print("[BOOT] PID settings loaded from Flash\r\n");
+          UI_SetAllDisplaysBrightness((uint8_t)saved.display_brightness);
+          UART_Print("[BOOT] Settings loaded from Flash\r\n");
         } else {
             UART_Print("[BOOT] No saved PID settings, using defaults\r\n");
         }

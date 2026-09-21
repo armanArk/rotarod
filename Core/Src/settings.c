@@ -11,11 +11,20 @@
 #define FLASH_SETTINGS_ADDRESS  0x08020000UL
 #define FLASH_VOLTAGE_RANGE     FLASH_VOLTAGE_RANGE_3  // 2.7V - 3.6V
 
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    float    kp;
+    float    ki;
+    float    kd;
+    uint32_t hc165_enabled;
+    uint32_t checksum;
+} MotorSettingsV1;
+
 // Hitung XOR checksum dari semua field kecuali checksum itu sendiri
-static uint32_t calc_checksum(const MotorSettings *s) {
-    const uint32_t *p = (const uint32_t *)s;
+static uint32_t calc_checksum(const void *data, size_t word_count) {
+    const uint32_t *p = (const uint32_t *)data;
     uint32_t chk = 0;
-    for (size_t i = 0; i < (sizeof(MotorSettings) / sizeof(uint32_t)) - 1; i++) {
+    for (size_t i = 0; i < word_count - 1; i++) {
         chk ^= p[i];
     }
     return chk;
@@ -26,23 +35,40 @@ bool Settings_Load(MotorSettings *out) {
 
     const MotorSettings *flash = (const MotorSettings *)FLASH_SETTINGS_ADDRESS;
 
-    // Cek magic number
-    if (flash->magic != SETTINGS_MAGIC) return false;
+    if (flash->magic == SETTINGS_MAGIC) {
+        uint32_t expected = calc_checksum(flash, sizeof(MotorSettings) / sizeof(uint32_t));
+        if (flash->checksum != expected) return false;
+        if (flash->kp < 0.0f || flash->kp > 100.0f) return false;
+        if (flash->ki < 0.0f || flash->ki > 100.0f) return false;
+        if (flash->kd < 0.0f || flash->kd > 100.0f) return false;
+        if (flash->display_brightness > 8) return false;
 
-    // Cek checksum integritas data
-    uint32_t expected = calc_checksum(flash);
-    if (flash->checksum != expected) return false;
+        memcpy(out, flash, sizeof(MotorSettings));
+        return true;
+    }
 
-    // Validasi nilai PID (sanity check agar tidak load nilai gila)
-    if (flash->kp < 0.0f || flash->kp > 100.0f) return false;
-    if (flash->ki < 0.0f || flash->ki > 100.0f) return false;
-    if (flash->kd < 0.0f || flash->kd > 100.0f) return false;
+    const MotorSettingsV1 *legacy = (const MotorSettingsV1 *)FLASH_SETTINGS_ADDRESS;
+    if (legacy->magic != SETTINGS_MAGIC_V1) return false;
+    if (legacy->checksum != calc_checksum(legacy, sizeof(MotorSettingsV1) / sizeof(uint32_t))) return false;
+    if (legacy->kp < 0.0f || legacy->kp > 100.0f) return false;
+    if (legacy->ki < 0.0f || legacy->ki > 100.0f) return false;
+    if (legacy->kd < 0.0f || legacy->kd > 100.0f) return false;
 
-    memcpy(out, flash, sizeof(MotorSettings));
+    memset(out, 0, sizeof(MotorSettings));
+    out->magic = SETTINGS_MAGIC;
+    out->kp = legacy->kp;
+    out->ki = legacy->ki;
+    out->kd = legacy->kd;
+    out->hc165_enabled = legacy->hc165_enabled;
+    out->display_brightness = 4;
+    out->checksum = calc_checksum(out, sizeof(MotorSettings) / sizeof(uint32_t));
     return true;
 }
 
-bool Settings_Save(float kp, float ki, float kd, uint32_t hc165_enabled) {
+bool Settings_SaveWithBrightness(float kp, float ki, float kd, uint32_t hc165_enabled,
+                                 uint32_t display_brightness) {
+    if (display_brightness > 8) return false;
+
     MotorSettings s;
     memset(&s, 0, sizeof(s));
     s.magic    = SETTINGS_MAGIC;
@@ -50,7 +76,8 @@ bool Settings_Save(float kp, float ki, float kd, uint32_t hc165_enabled) {
     s.ki       = ki;
     s.kd       = kd;
     s.hc165_enabled = hc165_enabled;
-    s.checksum = calc_checksum(&s);
+    s.display_brightness = display_brightness;
+    s.checksum = calc_checksum(&s, sizeof(MotorSettings) / sizeof(uint32_t));
 
     HAL_FLASH_Unlock();
 
@@ -78,4 +105,12 @@ bool Settings_Save(float kp, float ki, float kd, uint32_t hc165_enabled) {
 
     HAL_FLASH_Lock();
     return (status == HAL_OK);
+}
+
+bool Settings_Save(float kp, float ki, float kd, uint32_t hc165_enabled) {
+    MotorSettings current;
+    uint32_t display_brightness = 4;
+    if (Settings_Load(&current)) display_brightness = current.display_brightness;
+
+    return Settings_SaveWithBrightness(kp, ki, kd, hc165_enabled, display_brightness);
 }

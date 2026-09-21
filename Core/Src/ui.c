@@ -8,6 +8,10 @@
 #define HC165_NUM_CHIPS     4
 #define HC165_TOTAL_PINS    (HC165_NUM_CHIPS * 8)
 #define NUM_DISPLAYS        7
+#define LANE_DISPLAY_COUNT  5
+#define ACTUAL_RPM_DISPLAY  5
+#define SET_RPM_DISPLAY     6
+#define RPM_DISPLAY_BRIGHTNESS 4
 #define DISPLAY_UPDATE_MS   100
 #define BUTTON_READ_MS      5
 #define FALL_DEBOUNCE_MS    500
@@ -55,9 +59,19 @@ void UI_Init(void) {
         lanes[i].prev_btn_stop = 0;
         lanes[i].prev_btn_reset = 0;
         lanes[i].prev_ext_btn = 0;
+        lanes[i].prev_cable_det = 1; // 1 = disconnected default
         lanes[i].prev_magnet = 0;
         lanes[i].last_magnet_tick = 0;
     }
+}
+
+bool UI_SetAllDisplaysBrightness(uint8_t brightness) {
+    if (brightness > 8) return false;
+
+    for (uint8_t i = 0; i < LANE_DISPLAY_COUNT; i++) Display_SetBrightness(i, brightness);
+    Display_SetBrightness(ACTUAL_RPM_DISPLAY, RPM_DISPLAY_BRIGHTNESS);
+    Display_SetBrightness(SET_RPM_DISPLAY, RPM_DISPLAY_BRIGHTNESS);
+    return true;
 }
 
 void UI_Process(void) {
@@ -95,26 +109,38 @@ void UI_Process(void) {
 
             uint8_t start_edge = (!btn_start && lanes[i].prev_btn_start);
             uint8_t stop_edge  = (!btn_stop && lanes[i].prev_btn_stop);
-            uint8_t ext_edge   = (!ext_btn && lanes[i].prev_ext_btn);
             uint8_t reset_edge = (!btn_reset && lanes[i].prev_btn_reset);
+            
+            // Mendeteksi SEGALA perubahan status pada tombol eksternal (State Change untuk Self-Lock)
+            uint8_t ext_edge = (ext_btn != lanes[i].prev_ext_btn);
+            
+            // Cegah false-trigger saat kabel baru saja ditancapkan (saat status kabel berubah 1 -> 0)
+            if (cable_det == 0 && lanes[i].prev_cable_det == 1) {
+                ext_edge = 0; // Batalkan trigger
+            }
+
             uint8_t magnet_edge= (!magnet && lanes[i].prev_magnet);
 
             lanes[i].prev_btn_start = btn_start;
             lanes[i].prev_btn_stop  = btn_stop;
             lanes[i].prev_btn_reset = btn_reset;
             lanes[i].prev_ext_btn   = ext_btn;
+            lanes[i].prev_cable_det = cable_det;
             lanes[i].prev_magnet    = magnet;
 
             uint8_t trigger_start = 0;
             uint8_t trigger_stop  = 0;
 
+            uint8_t ext_trigger_reset = 0;
             if (cable_det == 0) {
-                // Cable connected: Onboard buttons ignored. Ext button toggles.
+                // Cable connected: Onboard start/stop ignored. Ext button cycles Start->Stop->Reset.
                 if (ext_edge) {
-                    if (lanes[i].status == LANE_IDLE || lanes[i].status == LANE_STOPPED) {
+                    if (lanes[i].status == LANE_IDLE) {
                         trigger_start = 1;
                     } else if (lanes[i].status == LANE_RUNNING) {
                         trigger_stop = 1;
+                    } else if (lanes[i].status == LANE_STOPPED) {
+                        ext_trigger_reset = 1;
                     }
                 }
             } else {
@@ -123,8 +149,8 @@ void UI_Process(void) {
                 if (stop_edge)  trigger_stop = 1;
             }
 
-            // Execute Start
-            if (trigger_start && lanes[i].status != LANE_RUNNING) {
+            // Execute Start (Hanya boleh start jika timer sudah dalam keadaan Reset / IDLE)
+            if (trigger_start && lanes[i].status == LANE_IDLE) {
                 lanes[i].status = LANE_RUNNING;
                 lanes[i].start_tick = HAL_GetTick();
                 lanes[i].duration_ms = 0;
@@ -145,8 +171,9 @@ void UI_Process(void) {
                 }
             }
 
-            // Execute Reset (hanya dieksekusi 1x tepat saat tombol ditekan / falling edge)
-            if (reset_edge) {
+            // Execute Reset (Hanya boleh reset jika timer sedang tidak berjalan)
+            // reset_edge (onboard) hanya aktif jika kabel eksternal tidak tercolok
+            if ((ext_trigger_reset || (reset_edge && cable_det != 0)) && lanes[i].status != LANE_RUNNING) {
                 char dbgbuf[40];
                 sprintf(dbgbuf, ">>> RESET PRESSED LANE %d <<<\r\n", i);
                 UART_Print(dbgbuf);

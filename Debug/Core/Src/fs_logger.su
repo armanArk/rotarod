@@ -9,7 +9,8 @@
 ../Core/Src/fs_logger.c:138:6:CheckAndFormatIfMismatch	640	static
 ../Core/Src/fs_logger.c:178:6:Log_Init	4	static
 ../Core/Src/fs_logger.c:183:6:Log_AddEvent	192	static
-../Core/Src/fs_logger.c:202:6:Log_FlushToCSV	160	static
-../Core/Src/fs_logger.c:237:6:Log_StageEvents	160	static
-../Core/Src/fs_logger.c:259:6:Log_ReadCSV	272	static
-../Core/Src/fs_logger.c:275:10:Log_GetEventCount	4	static
+../Core/Src/fs_logger.c:201:6:Log_FlushToCSV	168	static
+../Core/Src/fs_logger.c:239:6:Log_ClearCSV	80	static
+../Core/Src/fs_logger.c:266:6:Log_StageEvents	168	static
+../Core/Src/fs_logger.c:293:6:Log_ReadCSV	272	static
+../Core/Src/fs_logger.c:309:10:Log_GetEventCount	4	static

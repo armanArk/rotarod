@@ -4,4 +4,4 @@
 ../Core/Src/cli.c:55:6:HAL_UART_TxCpltCallback	24	static
 ../Core/Src/cli.c:74:14:my_atof	32	static
 ../Core/Src/cli.c:88:6:USART1_Rx_ISR	16	static
-../Core/Src/cli.c:107:6:ProcessUartRxCommand	512	static
+../Core/Src/cli.c:107:6:ProcessUartRxCommand	576	static

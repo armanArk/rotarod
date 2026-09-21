@@ -72,7 +72,7 @@ void Motor_ForceRPMReset(void) {
 }
 
 void Motor_SetCLITarget(uint32_t rpm_target) {
-    if (rpm_target > 150) rpm_target = 150;
+    if (rpm_target > 100) rpm_target = 100;
     set_value = rpm_target;
 }
 
@@ -313,7 +313,7 @@ void Motor_RotaryIncrement(void) {
     // Dilarang memanggil UART_Print langsung (blocking HAL).
     // Pesan ditulis ke buffer, Motor_Process() yang mencetak dari main loop.
     if (control_mode == MOTOR_MODE_PID || control_mode == MOTOR_MODE_CLI) {
-        if (set_value < 150) set_value++;
+        if (set_value < 100) set_value++;
         if (!deferred_msg_pending) {
             snprintf(deferred_msg_buf, DEFERRED_MSG_LEN,
                      "[ROTARY CW] Mode: PID/CLI, Target RPM: %lu\r\n", (unsigned long)set_value);

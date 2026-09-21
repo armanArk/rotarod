@@ -1,6 +1,7 @@
 #ifndef UI_H
 #define UI_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "main.h"
 
@@ -19,6 +20,7 @@ typedef struct {
     uint8_t prev_btn_stop;
     uint8_t prev_btn_reset;
     uint8_t prev_ext_btn;
+    uint8_t prev_cable_det;
     uint8_t prev_magnet;
     uint32_t last_magnet_tick;
 } LaneState_t;
@@ -26,11 +28,13 @@ typedef struct {
 // Initialize displays
 void UI_Init(void);
 
+// Set TM1637 brightness for lane displays; RPM displays remain at brightness 4
+bool UI_SetAllDisplaysBrightness(uint8_t brightness);
+
 // Process button inputs and update displays periodically
 void UI_Process(void);
 
 // Manually trigger a fall event for a specific lane (0 to 4)
-#include <stdbool.h>
 bool UI_TriggerFall(uint8_t lane_index);
 bool UI_StartLane(uint8_t lane_index);
 bool UI_StopLane(uint8_t lane_index);

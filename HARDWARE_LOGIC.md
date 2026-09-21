@@ -36,19 +36,25 @@ Sistem memiliki 7 buah modul layar 4-digit TM1637 yang dihubungkan ke mikrokontr
 
 ## 3. State Machine (Logika Cara Kerja)
 
-Setiap Lane (1 sampai 5) berjalan secara **sepenuhnya independen** dengan aturan logika berikut:
+### A. Aturan Pengamanan Tombol (Safety Logic)
+- **Tombol Start:** Hanya merespon jika timer dalam keadaan `00:00` (*Idle*). Jika timer sedang berhenti dengan angka hasil lari (misal `01:23`), Start tidak akan merespon untuk mencegah data tertimpa tanpa sengaja. Timer wajib di-*Reset* terlebih dahulu.
+- **Tombol Reset:** Hanya merespon jika timer sedang tidak berjalan (*Stopped* atau *Idle*). Dilarang mereset timer yang sedang aktif berlari.
 
-### A. Fitur Pendeteksi Kabel Eksternal (*Override*)
+### B. Fitur Pendeteksi Kabel Eksternal (*Override*)
 - Pin **Kabel Eksternal Detect** bertipe *Active Low*. Artinya, jika kabel ditancapkan ke konektor PCB, pin ini akan terhubung ke `GND`.
-- **Jika Kabel Tercolok (GND):** Sistem akan langsung mematikan/mengabaikan fungsi tombol *Start* dan *Stop* Onboard. Sistem hanya akan merespons penekanan dari **Tombol Eksternal**. Tombol eksternal ini berfungsi ganda sebagai saklar tekan (*Toggle*); tekan pertama untuk *Start*, tekan kedua untuk *Stop*.
+- **Jika Kabel Tercolok (GND):** Sistem akan langsung mematikan/mengabaikan fungsi tombol *Start* dan *Stop* Onboard. Sistem hanya akan merespons penekanan dari **Tombol Eksternal** genggam.
+- Tombol eksternal genggam berfungsi ganda secara siklus (siklis 3-tahap):
+  1. **Tekanan 1:** *Start* (memulai timer, hanya berlaku jika `00:00`).
+  2. **Tekanan 2:** *Stop* (memberhentikan timer, dan otomatis mencatat data).
+  3. **Tekanan 3:** *Reset* (mengembalikan timer ke `00:00` dan siap di-*start* kembali).
 - **Jika Kabel Dicabut (HIGH):** Tombol *Start* dan *Stop* Onboard akan berfungsi normal kembali, dan pin Tombol Eksternal diabaikan.
-- Tombol **Reset Onboard** tidak terpengaruh oleh kabel eksternal (selalu aktif untuk mereset angka ke 0 saat timer sedang berhenti).
+- Tombol **Reset Onboard** tidak terpengaruh oleh kabel eksternal dan tetap aktif digunakan jika sewaktu-waktu dibutuhkan (sesuai aturan keselamatan).
 
-### B. Fitur Pencatatan CSV Otomatis (Flashdisk USB)
-- Saat timer sedang berjalan (*Running*), mikrokontroler akan terus mendengarkan **Sensor Magnet** di masing-masing Lane.
-- Jika ada tikus yang jatuh (Sensor Magnet terpicu / *Edge detection*), Timer di layar TM1637 untuk Lane tersebut akan **langsung membeku/berhenti**.
-- Waktu lari (dalam satuan ms, menggunakan memori 32-bit yang tahan hingga 49 hari), RPM, dan nomor Lane akan otomatis diformat dan dikirim ke sistem antrean.
-- Saat Flashdisk / PC mendeteksi penyimpanan, baris data baru (misal: `29/07/26,13:10:48,2421,15,3`) akan ditambahkan secara permanen ke bagian bawah file `ROTAROD.CSV`.
+### C. Fitur Pencatatan CSV Otomatis (Flashdisk USB)
+- Saat timer sedang berjalan (*Running*), mikrokontroler akan terus mendengarkan **Sensor Magnet** dan input **Stop**.
+- Jika ada tikus yang jatuh alami (Sensor Magnet terpicu) **ATAU** peneliti menekan tombol **Stop manual** (karena tikus *passive rotation* / melompat kabur), Timer di layar TM1637 untuk Lane tersebut akan **langsung membeku/berhenti**.
+- Sistem langsung menyimpan durasi lari, RPM saat itu, dan nomor Lane ke *event logger*.
+- Saat Flashdisk / PC terhubung secara benar, baris data baru (misal: `29/07/26,13:10:48,2421,15,3`) akan ditambahkan secara permanen ke file `ROTAROD.CSV`.
 
 ---
 *Dokumen ini dibuat otomatis sebagai panduan manufaktur dan troubleshooting.*

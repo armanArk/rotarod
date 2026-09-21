@@ -1,3 +1,4 @@
-../Core/Src/settings.c:15:17:calc_checksum	2
-../Core/Src/settings.c:24:6:Settings_Load	10
-../Core/Src/settings.c:45:6:Settings_Save	4
+../Core/Src/settings.c:24:17:calc_checksum	2
+../Core/Src/settings.c:33:6:Settings_Load	19
+../Core/Src/settings.c:68:6:Settings_SaveWithBrightness	5
+../Core/Src/settings.c:110:6:Settings_Save	2

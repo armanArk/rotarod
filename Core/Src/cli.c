@@ -305,6 +305,29 @@ void ProcessUartRxCommand(void) {
         } else if (strcmp(cmd, "USB OFF") == 0) {
             usb_function_enabled = 0;
             UART_Print("\r\n[USB] Fungsi USB DINONAKTIFKAN. Chattering VBUS diabaikan sepenuhnya.\r\n");
+        } else if (strncmp(cmd, "BRIGHTNESS ", 11) == 0) {
+            int brightness;
+            char extra;
+            if (sscanf(pending_cmd + 11, "%d %c", &brightness, &extra) == 1 &&
+                brightness >= 0 && brightness <= 8) {
+                float kp, ki, kd;
+                uint32_t hc165_enabled = 1;
+                Motor_GetPID(&kp, &ki, &kd);
+
+                MotorSettings settings;
+                if (Settings_Load(&settings)) hc165_enabled = settings.hc165_enabled;
+
+                if (Settings_SaveWithBrightness(kp, ki, kd, hc165_enabled, (uint32_t)brightness)) {
+                    UI_SetAllDisplaysBrightness((uint8_t)brightness);
+                    char msg[72];
+                    sprintf(msg, "\r\n[DISPLAY] Brightness lane diset ke %d dan disimpan. RPM tetap 4.\r\n", brightness);
+                    UART_Print(msg);
+                } else {
+                    UART_Print("\r\n[DISPLAY] GAGAL menyimpan brightness ke Flash.\r\n");
+                }
+            } else {
+                UART_Print("\r\n[Error] Gunakan: BRIGHTNESS <level 0-8>\r\n");
+            }
         } else if (strcmp(cmd, "HELP") == 0) {
             UART_Print("\r\n=== FTDI Commands ===\r\n"
                        "  MODE PID              : Potensiometer -> Target RPM -> PID\r\n"
@@ -321,6 +344,7 @@ void ProcessUartRxCommand(void) {
                        "  CLEARDATA             : Hapus semua data di CSV (header tetap ada)\r\n"
                        "  DEBUG <MODE>          : Atur mode debug (AUTO, SHIFTR, PID, FLASH)\r\n"
                        "  USB ON / OFF          : Aktifkan/Matikan fungsi USB (atasi chattering VBUS)\r\n"
+                       "  BRIGHTNESS <0-8>    : Atur brightness display lane (RPM tetap 4)\r\n"
                        "  DEBUG PID             : Debug tampilkan data motor/PID\r\n"
                        "  DEBUG FLASH           : Debug tampilkan data USB/Filesystem\r\n"
                        "  DEBUG SHIFTR          : Debug tampilkan data Shift Register\r\n"
