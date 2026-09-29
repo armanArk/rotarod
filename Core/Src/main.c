@@ -294,6 +294,15 @@ int main(void)
             }
         }
 
+        // Auto-Sync Feature: Jika USB terhubung tapi ada data mencit baru di EEPROM,
+        // paksa disconnect sesaat agar data tertulis ke CSV, lalu otomatis reconnect.
+        if (usb_sm_state == USB_SM_CONN_WAIT && staging_has_entries() > 0 && usb_function_enabled) {
+            UART_Print("[USB] Auto-Sync: Mencit jatuh! Memutus USB sesaat untuk menulis data...\r\n");
+            usb_sm_state = USB_SM_DISCONN_START;
+            last_usb_state = 0; // Paksa mendeteksi "colok" lagi nantinya
+            vbus_event_pending = 1; // Paksa segera dicek
+        }
+
         // Jika USB function dinonaktifkan saat masih connected → paksa disconnect
         if (!usb_function_enabled && usb_sm_state == USB_SM_CONN_WAIT) {
             UART_Print("[USB] Function disabled — forcing disconnect\r\n");
