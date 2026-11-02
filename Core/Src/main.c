@@ -255,6 +255,11 @@ int main(void)
 
     UsbSmState_t usb_sm_state = USB_SM_IDLE;
     uint32_t usb_sm_tick = 0;
+    #define AUTOSYNC_QUIET_MS    2000U   // tunggu tenang setelah event terakhir
+    #define AUTOSYNC_MIN_GAP_MS  10000U  // jarak minimum antar siklus putus-sambung
+    int      autosync_prev_cnt = 0;
+    uint32_t autosync_change_tick = 0;
+    uint32_t autosync_last_cycle_tick = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -294,13 +299,30 @@ int main(void)
             }
         }
 
-        // Auto-Sync Feature: Jika USB terhubung tapi ada data mencit baru di EEPROM,
-        // paksa disconnect sesaat agar data tertulis ke CSV, lalu otomatis reconnect.
-        if (usb_sm_state == USB_SM_CONN_WAIT && staging_has_entries() > 0 && usb_function_enabled) {
-            UART_Print("[USB] Auto-Sync: Mencit jatuh! Memutus USB sesaat untuk menulis data...\r\n");
-            usb_sm_state = USB_SM_DISCONN_START;
-            last_usb_state = 0; // Paksa mendeteksi "colok" lagi nantinya
-            vbus_event_pending = 1; // Paksa segera dicek
+        // Auto-Sync: USB tetap tercolok tapi ada data mencit baru di EEPROM staging.
+        // Putus USB secara software (tanpa cabut kabel), tulis data ke CSV, lalu sambung lagi.
+        // Tunggu jeda tenang AUTOSYNC_QUIET_MS setelah event terakhir supaya beberapa mencit
+        // yang jatuh berdekatan digabung dalam 1x siklus, dan batasi min AUTOSYNC_MIN_GAP_MS
+        // antar siklus agar Windows tidak "ting-tong" terus-menerus.
+        if (usb_sm_state == USB_SM_CONN_WAIT && usb_function_enabled) {
+            uint32_t now = HAL_GetTick();
+            int cnt = staging_has_entries();
+            if (cnt != autosync_prev_cnt) {
+                autosync_prev_cnt = cnt;
+                autosync_change_tick = now;
+            }
+            if (cnt > 0 &&
+                (now - autosync_change_tick) >= AUTOSYNC_QUIET_MS &&
+                (now - autosync_last_cycle_tick) >= AUTOSYNC_MIN_GAP_MS) {
+                UART_Print("[USB] Auto-Sync: data baru, putus USB sesaat untuk menulis CSV...\r\n");
+                autosync_last_cycle_tick = now;
+                autosync_prev_cnt = 0;
+                usb_sm_state = USB_SM_DISCONN_START;
+                last_usb_state = 0;      // Paksa deteksi "colok" lagi setelah selesai
+                vbus_event_pending = 1;  // Segera cek VBUS di loop berikutnya
+            }
+        } else {
+            autosync_prev_cnt = 0;
         }
 
         // Jika USB function dinonaktifkan saat masih connected → paksa disconnect
@@ -325,10 +347,15 @@ int main(void)
             case USB_SM_CONN_START:
                 UART_Print("USB connected - exposing flash\r\n");
                 UnmountAllFS(); // Lepas FS dari internal STM32 agar Windows punya akses eksklusif
-                HAL_PCD_DevConnect(&hpcd_USB_OTG_FS); // Symmetrical: DevDisconnect is called on disconnect
+                STORAGE_Invalidate();
                 STORAGE_UpdateCapacity(FS_GetFlashCapacity());
                 STORAGE_SetPartitionOffset(0);
                 STORAGE_SetMediaReady(1);
+                // Paksa edge pull-up D+ baru agar host (Windows) enumerasi ulang dari awal,
+                // dan media sudah siap sebelum host mulai bertanya.
+                HAL_PCD_DevDisconnect(&hpcd_USB_OTG_FS);
+                HAL_Delay(100);
+                HAL_PCD_DevConnect(&hpcd_USB_OTG_FS); // Symmetrical: DevDisconnect is called on disconnect
                 usb_sm_state = USB_SM_CONN_WAIT;
                 break;
 

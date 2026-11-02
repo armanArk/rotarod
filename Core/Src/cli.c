@@ -320,7 +320,7 @@ void ProcessUartRxCommand(void) {
                 if (Settings_SaveWithBrightness(kp, ki, kd, hc165_enabled, (uint32_t)brightness)) {
                     UI_SetAllDisplaysBrightness((uint8_t)brightness);
                     char msg[72];
-                    sprintf(msg, "\r\n[DISPLAY] Brightness lane diset ke %d dan disimpan. RPM tetap 4.\r\n", brightness);
+                    sprintf(msg, "\r\n[DISPLAY] Brightness semua display diset ke %d dan disimpan.\r\n", brightness);
                     UART_Print(msg);
                 } else {
                     UART_Print("\r\n[DISPLAY] GAGAL menyimpan brightness ke Flash.\r\n");
@@ -344,7 +344,7 @@ void ProcessUartRxCommand(void) {
                        "  CLEARDATA             : Hapus semua data di CSV (header tetap ada)\r\n"
                        "  DEBUG <MODE>          : Atur mode debug (AUTO, SHIFTR, PID, FLASH)\r\n"
                        "  USB ON / OFF          : Aktifkan/Matikan fungsi USB (atasi chattering VBUS)\r\n"
-                       "  BRIGHTNESS <0-8>    : Atur brightness display lane (RPM tetap 4)\r\n"
+                       "  BRIGHTNESS <0-8>    : Atur brightness semua display (0 = mati)\r\n"
                        "  DEBUG PID             : Debug tampilkan data motor/PID\r\n"
                        "  DEBUG FLASH           : Debug tampilkan data USB/Filesystem\r\n"
                        "  DEBUG SHIFTR          : Debug tampilkan data Shift Register\r\n"

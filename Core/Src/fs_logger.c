@@ -53,9 +53,9 @@ void MountFS(void) {
     if (fr == FR_OK) {
         fs_mounted = 1;
         UART_Print("FatFS mounted OK\r\n");
-        // Ensure volume label is ROTAROD
-        FRESULT lab_fr = f_setlabel("ROTAROD");
-        if (lab_fr == FR_OK) UART_Print("Volume label set to ROTAROD\r\n");
+        // Ensure volume label is INTRALAB
+        FRESULT lab_fr = f_setlabel("INTRALAB");
+        if (lab_fr == FR_OK) UART_Print("Volume label set to INTRALAB\r\n");
         else { char msg[48]; sprintf(msg, "Set label err: %d\r\n", lab_fr); UART_Print(msg); }
     } else if (fr == FR_NO_FILESYSTEM) {
         UART_Print("No FS - needs format\r\n");
@@ -115,8 +115,8 @@ void FormatFS(void) {
             fr = f_mount(&USERFatFS, USERPath, 1);
             if (fr == FR_OK) {
                 fs_mounted = 1;
-                FRESULT lab_fr = f_setlabel("ROTAROD");
-                if (lab_fr == FR_OK) UART_Print("Volume label set to ROTAROD\r\n");
+                FRESULT lab_fr = f_setlabel("INTRALAB");
+                if (lab_fr == FR_OK) UART_Print("Volume label set to INTRALAB\r\n");
                 else {
                     char msg[48]; sprintf(msg, "Set label err: %d\r\n", lab_fr); UART_Print(msg);
                 }

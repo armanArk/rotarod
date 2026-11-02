@@ -28,7 +28,7 @@ typedef struct {
 // Initialize displays
 void UI_Init(void);
 
-// Set TM1637 brightness for lane displays; RPM displays remain at brightness 4
+// Set TM1637 brightness for all displays (brightness: 0-8)
 bool UI_SetAllDisplaysBrightness(uint8_t brightness);
 
 // Process button inputs and update displays periodically

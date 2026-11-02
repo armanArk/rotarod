@@ -8,10 +8,6 @@
 #define HC165_NUM_CHIPS     4
 #define HC165_TOTAL_PINS    (HC165_NUM_CHIPS * 8)
 #define NUM_DISPLAYS        7
-#define LANE_DISPLAY_COUNT  5
-#define ACTUAL_RPM_DISPLAY  5
-#define SET_RPM_DISPLAY     6
-#define RPM_DISPLAY_BRIGHTNESS 4
 #define DISPLAY_UPDATE_MS   100
 #define BUTTON_READ_MS      5
 #define FALL_DEBOUNCE_MS    500
@@ -68,9 +64,7 @@ void UI_Init(void) {
 bool UI_SetAllDisplaysBrightness(uint8_t brightness) {
     if (brightness > 8) return false;
 
-    for (uint8_t i = 0; i < LANE_DISPLAY_COUNT; i++) Display_SetBrightness(i, brightness);
-    Display_SetBrightness(ACTUAL_RPM_DISPLAY, RPM_DISPLAY_BRIGHTNESS);
-    Display_SetBrightness(SET_RPM_DISPLAY, RPM_DISPLAY_BRIGHTNESS);
+    for (uint8_t i = 0; i < NUM_DISPLAYS; i++) Display_SetBrightness(i, brightness);
     return true;
 }
 
