@@ -14,6 +14,9 @@ extern TIM_HandleTypeDef htim5;
 // 8 sample: window ~8ms @ 1000 MRPM — cukup untuk respon cepat saat deselerasi
 #define PULSE_HISTORY_LEN          8
 #define PWM_MAX_DUTY               3788
+// Rasio estimasi PWM terhadap Motor RPM untuk Integral Pre-load.
+// Membantu motor langsung melompat ke steady-state PWM dalam 1-2 detik saat knob diputar.
+#define PID_PRELOAD_RATIO          0.65f
 
 // ================================================================
 // Variabel yang di-share antara ISR dan Motor_Process
@@ -38,6 +41,7 @@ static float pid_ki = 0.60f;
 static float pid_kd = 0.00f;
 static float pid_integral = 0.0f;
 static float pid_prev_error = 0.0f;
+static uint32_t prev_set_value_pid = 0;
 
 
 static uint32_t last_capture_time = 0;
@@ -69,6 +73,7 @@ float    Motor_GetPreciseOutputRPM(void) { return precise_rpm / (float)GEARBOX_R
 void Motor_ForceRPMReset(void) {
     rpm = 0;
     precise_rpm = 0.0f;
+    prev_set_value_pid = 0;
 }
 
 void Motor_SetCLITarget(uint32_t rpm_target) {
@@ -104,6 +109,7 @@ void Motor_SetMode(MotorControlMode mode) {
     // Reset PID state on mode switch to avoid integral windup from previous mode
     pid_integral   = 0.0f;
     pid_prev_error = 0.0f;
+    prev_set_value_pid = 0;
 }
 
 MotorControlMode Motor_GetMode(void) {
@@ -193,10 +199,39 @@ void Motor_Process(void) {
             float target_motor_rpm = (float)(sv * GEARBOX_RATIO);
             float current_motor_rpm = precise_rpm;
 
+            // Integral Pre-load: saat target berubah, isi integral
+            // langsung ke perkiraan nilai yang tepat agar motor tidak merangkak dari 0.
+            // Memungkinkan motor mencapai target secara instan (1-2 detik) saat knob diputar.
+            if (sv != prev_set_value_pid) {
+                if (sv == 0) {
+                    pid_integral   = 0.0f;
+                    pid_prev_error = 0.0f;
+                } else if (prev_set_value_pid == 0) {
+                    // Start dari diam ke target baru: pre-load integral ke baseline
+                    if (pid_ki > 0.001f) {
+                        pid_integral = (target_motor_rpm * PID_PRELOAD_RATIO) / pid_ki;
+                    }
+                    pid_prev_error = 0.0f;
+                } else {
+                    // Sedang jalan dan target diubah naik/turun:
+                    int32_t sdiff = (int32_t)sv - (int32_t)prev_set_value_pid;
+                    float delta_motor_rpm = (float)sdiff * GEARBOX_RATIO;
+                    if (pid_ki > 0.001f) {
+                        pid_integral += (delta_motor_rpm * PID_PRELOAD_RATIO) / pid_ki;
+                    }
+                    if (pid_integral < 0.0f) pid_integral = 0.0f;
+                    if (pid_ki > 0.001f && pid_integral > ((float)PWM_MAX_DUTY / pid_ki)) {
+                        pid_integral = (float)PWM_MAX_DUTY / pid_ki;
+                    }
+                }
+                prev_set_value_pid = sv;
+            }
+
             if (target_motor_rpm < 1.0f) {
                 pwm_duty = 0;
                 pid_integral   = 0.0f;
                 pid_prev_error = 0.0f;
+                prev_set_value_pid = 0;
             } else {
                 float error = target_motor_rpm - current_motor_rpm;
 
