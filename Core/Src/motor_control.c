@@ -15,8 +15,9 @@ extern TIM_HandleTypeDef htim5;
 #define PULSE_HISTORY_LEN          8
 #define PWM_MAX_DUTY               3788
 // Rasio estimasi PWM terhadap Motor RPM untuk Integral Pre-load.
-// Membantu motor langsung melompat ke steady-state PWM dalam 1-2 detik saat knob diputar.
-#define PID_PRELOAD_RATIO          0.65f
+// Berdasarkan data log empiris: di 10 RPM butuh INT ~960 (PWM ~290), rasio = 290 / 233 = 1.25.
+// Mengisi integral langsung ke ~960 saat set 10 RPM agar motor langsung stabil dalam 1-2 detik (bukan 30 detik).
+#define PID_PRELOAD_RATIO          1.25f
 
 // ================================================================
 // Variabel yang di-share antara ISR dan Motor_Process
